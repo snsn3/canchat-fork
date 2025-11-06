@@ -48,6 +48,7 @@ from open_webui.routers import (
     auths,
     channels,
     chats,
+    domains,
     folders,
     configs,
     groups,
@@ -68,11 +69,11 @@ from mcp_backend.routers import mcp, crew_mcp
 
 from open_webui.routers.retrieval import (
     get_embedding_function,
-    get_ef,
-    get_rf,
+    load_embedding_model,
+    load_reranker_model,
 )
 
-from open_webui.internal.db import Session
+from open_webui.internal.db import Session, get_db
 
 from open_webui.models.functions import Functions
 from open_webui.models.models import Models
@@ -184,6 +185,7 @@ from open_webui.config import (
     ENABLE_RAG_WEB_SEARCH,
     ENABLE_WIKIPEDIA_GROUNDING,
     ENABLE_WIKIPEDIA_GROUNDING_RERANKER,
+    WIKIPEDIA_GROUNDING_MAX_CONCURRENT,
     BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL,
     ENABLE_GOOGLE_DRIVE_INTEGRATION,
     WEBUI_AUTH,
@@ -263,6 +265,11 @@ from open_webui.config import (
     JIRA_USERNAME,
     JIRA_API_TOKEN,
     JIRA_PROJECT_KEY,
+    # Chat Lifetime
+    CHAT_LIFETIME_ENABLED,
+    CHAT_LIFETIME_DAYS,
+    CHAT_CLEANUP_PRESERVE_PINNED,
+    CHAT_CLEANUP_PRESERVE_ARCHIVED,
 )
 from open_webui.env import (
     CHANGELOG,
@@ -281,6 +288,7 @@ from open_webui.env import (
     RESET_CONFIG_ON_START,
 )
 
+from open_webui.logging import LoggingMiddleware, reconfigure_access_log
 
 from open_webui.utils.models import (
     get_all_models,
@@ -312,6 +320,8 @@ if SAFE_MODE:
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
+
+reconfigure_access_log()
 
 
 class SPAStaticFiles(StaticFiles):
@@ -399,6 +409,15 @@ async def lifespan(app: FastAPI):
     # Start periodic cleanup task in background (should not affect app lifecycle)
     cleanup_task = asyncio.create_task(periodic_usage_pool_cleanup())
 
+    # Initialize chat lifetime scheduler
+    try:
+        from open_webui.scheduler import start_chat_lifetime_scheduler
+
+        start_chat_lifetime_scheduler()
+        log.info("Chat lifetime scheduler initialized")
+    except Exception as e:
+        log.error(f"Failed to initialize chat lifetime scheduler: {e}")
+
     # Add task completion callback to log if it exits
     def on_cleanup_done(task):
         try:
@@ -449,6 +468,15 @@ async def lifespan(app: FastAPI):
                 log.info("MCP manager cleanup completed")
             except Exception as e:
                 log.error(f"Error during MCP manager cleanup: {e}")
+
+        # Cleanup chat lifetime scheduler
+        try:
+            from open_webui.scheduler import stop_chat_lifetime_scheduler
+
+            stop_chat_lifetime_scheduler()
+            log.info("Chat lifetime scheduler cleanup completed")
+        except Exception as e:
+            log.error(f"Error during chat lifetime scheduler cleanup: {e}")
 
 
 app = FastAPI(
@@ -561,6 +589,12 @@ app.state.config.LDAP_USE_TLS = LDAP_USE_TLS
 app.state.config.LDAP_CA_CERT_FILE = LDAP_CA_CERT_FILE
 app.state.config.LDAP_CIPHERS = LDAP_CIPHERS
 
+# Chat Lifetime Configuration
+app.state.config.CHAT_LIFETIME_ENABLED = CHAT_LIFETIME_ENABLED
+app.state.config.CHAT_LIFETIME_DAYS = CHAT_LIFETIME_DAYS
+app.state.config.CHAT_CLEANUP_PRESERVE_PINNED = CHAT_CLEANUP_PRESERVE_PINNED
+app.state.config.CHAT_CLEANUP_PRESERVE_ARCHIVED = CHAT_CLEANUP_PRESERVE_ARCHIVED
+
 
 app.state.AUTH_TRUSTED_EMAIL_HEADER = WEBUI_AUTH_TRUSTED_EMAIL_HEADER
 app.state.AUTH_TRUSTED_NAME_HEADER = WEBUI_AUTH_TRUSTED_NAME_HEADER
@@ -620,6 +654,7 @@ app.state.config.ENABLE_WIKIPEDIA_GROUNDING = ENABLE_WIKIPEDIA_GROUNDING
 app.state.config.ENABLE_WIKIPEDIA_GROUNDING_RERANKER = (
     ENABLE_WIKIPEDIA_GROUNDING_RERANKER
 )
+app.state.config.WIKIPEDIA_GROUNDING_MAX_CONCURRENT = WIKIPEDIA_GROUNDING_MAX_CONCURRENT
 app.state.config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL = (
     BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL
 )
@@ -655,13 +690,13 @@ app.state.YOUTUBE_LOADER_TRANSLATION = None
 
 
 try:
-    app.state.ef = get_ef(
+    app.state.ef = load_embedding_model(
         app.state.config.RAG_EMBEDDING_ENGINE,
         app.state.config.RAG_EMBEDDING_MODEL,
         RAG_EMBEDDING_MODEL_AUTO_UPDATE,
     )
 
-    app.state.rf = get_rf(
+    app.state.rf = load_reranker_model(
         app.state.config.RAG_RERANKING_MODEL,
         RAG_RERANKING_MODEL_AUTO_UPDATE,
     )
@@ -975,6 +1010,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Logging middleware is last to ensure it is first
+# on the request and last on the response.
+# https://fastapi.tiangolo.com/tutorial/middleware/#multiple-middleware-execution-order
+app.add_middleware(LoggingMiddleware)
 
 app.mount("/ws", socket_app)
 
@@ -1012,6 +1051,7 @@ app.include_router(tools.router, prefix="/api/v1/tools", tags=["tools"])
 
 app.include_router(memories.router, prefix="/api/v1/memories", tags=["memories"])
 app.include_router(folders.router, prefix="/api/v1/folders", tags=["folders"])
+app.include_router(domains.router, prefix="/api/v1/domains", tags=["domains"])
 app.include_router(groups.router, prefix="/api/v1/groups", tags=["groups"])
 app.include_router(files.router, prefix="/api/v1/files", tags=["files"])
 app.include_router(functions.router, prefix="/api/v1/functions", tags=["functions"])
@@ -1374,9 +1414,11 @@ async def healthcheck():
 
 
 @app.get("/health/db")
-async def healthcheck_with_db():
+def healthcheck_with_db():
     try:
-        Session.execute(text("SELECT 1;")).all()
+        # Use a dedicated session for health checks to avoid conflicts with long-running operations
+        with get_db() as db:
+            db.execute(text("SELECT 1;")).all()
         return {"status": True}
     except Exception as e:
         log.error(f"Database health check failed: {e}")
