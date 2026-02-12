@@ -121,6 +121,7 @@
 	import StarterKit from '@tiptap/starter-kit';
 
 	// Bubble and Floating menus updated to v3 to align with other TipTap dependencies
+	// Note: Previously kept at v2 due to styling issues. Upgrading to resolve npm dependency conflicts.
 	import BubbleMenu from '@tiptap/extension-bubble-menu';
 	import FloatingMenu from '@tiptap/extension-floating-menu';
 
