@@ -11,7 +11,7 @@ from open_webui.models.artifacts import (
     Artifacts,
     ArtifactResponse,
 )
-from open_webui.utils.artifacts import get_artifact_path, DEFAULT_BASE_URL
+from open_webui.utils.artifacts import get_artifact_path, delete_artifact_file, DEFAULT_BASE_URL
 from open_webui.utils.auth import get_admin_user, get_verified_user
 
 log = logging.getLogger(__name__)
@@ -192,7 +192,6 @@ async def delete_artifact(artifact_id: str, user=Depends(get_verified_user)):
         # Delete from database
         if Artifacts.delete_artifact_by_id(artifact_id):
             # Delete file from disk
-            from open_webui.utils.artifacts import delete_artifact_file
             delete_artifact_file(artifact.relative_path)
             
             return {"success": True, "message": "Artifact deleted successfully"}

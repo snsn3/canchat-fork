@@ -17,6 +17,29 @@ ARTIFACTS_DIR = Path(DATA_DIR) / "artifacts"
 DEFAULT_BASE_URL = "http://localhost:3000"
 
 
+def _validate_artifact_path(artifact_path: Path) -> None:
+    """
+    Validate that a path is safe and under the artifacts directory.
+    
+    Uses Path.is_relative_to() for robust path traversal prevention.
+    Requires Python 3.9+ (project requires 3.11+).
+    
+    Args:
+        artifact_path: Resolved path to validate
+        
+    Raises:
+        ValueError: If path is outside artifacts directory or invalid
+    """
+    # is_relative_to() raises TypeError for incompatible path types
+    # We also manually raise ValueError for path traversal attempts
+    try:
+        if not artifact_path.is_relative_to(ARTIFACTS_DIR.resolve()):
+            raise ValueError("Invalid artifact path: path traversal detected")
+    except (ValueError, TypeError) as e:
+        # Catch our ValueError or TypeError from is_relative_to
+        raise ValueError(f"Invalid artifact path: {str(e)}")
+
+
 def ensure_artifacts_dir():
     """Ensure the artifacts directory exists."""
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,18 +75,9 @@ def store_artifact(
     # Full path for the artifact
     artifact_path = ARTIFACTS_DIR / safe_filename
     
-    # Resolve path to prevent path traversal
+    # Resolve and validate path to prevent path traversal
     artifact_path = artifact_path.resolve()
-    
-    # Verify the resolved path is still under ARTIFACTS_DIR
-    # is_relative_to() raises TypeError for incompatible path types
-    # We also manually raise ValueError for path traversal attempts
-    try:
-        if not artifact_path.is_relative_to(ARTIFACTS_DIR.resolve()):
-            raise ValueError("Invalid artifact path: path traversal detected")
-    except (ValueError, TypeError) as e:
-        # Catch our ValueError or TypeError from is_relative_to
-        raise ValueError(f"Invalid artifact path: {str(e)}")
+    _validate_artifact_path(artifact_path)
     
     # Write the file
     if isinstance(src_path_or_bytes, bytes):
@@ -118,18 +132,9 @@ def get_artifact_path(relative_path: str) -> Path:
     # Construct full path
     artifact_path = ARTIFACTS_DIR / relative_path
     
-    # Resolve path to prevent path traversal
+    # Resolve and validate path to prevent path traversal
     artifact_path = artifact_path.resolve()
-    
-    # Verify the resolved path is still under ARTIFACTS_DIR
-    # is_relative_to() raises TypeError for incompatible path types
-    # We also manually raise ValueError for path traversal attempts
-    try:
-        if not artifact_path.is_relative_to(ARTIFACTS_DIR.resolve()):
-            raise ValueError("Invalid artifact path: path traversal detected")
-    except (ValueError, TypeError) as e:
-        # Catch our ValueError or TypeError from is_relative_to
-        raise ValueError(f"Invalid artifact path: {str(e)}")
+    _validate_artifact_path(artifact_path)
     
     return artifact_path
 
