@@ -147,6 +147,7 @@ class AbstractPostgresTest(AbstractIntegrationTest):
             "auth",
             "chat",
             "chatidtag",
+            "code_session",
             "document",
             "memory",
             "model",

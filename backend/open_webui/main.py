@@ -65,6 +65,7 @@ from open_webui.routers import (
     jira,
     utils,
     artifacts,
+    code,
 )
 from mcp_backend.routers import mcp, crew_mcp
 
@@ -1035,6 +1036,7 @@ app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["tasks"])
 app.include_router(images.router, prefix="/api/v1/images", tags=["images"])
 app.include_router(audio.router, prefix="/api/v1/audio", tags=["audio"])
 app.include_router(retrieval.router, prefix="/api/v1/retrieval", tags=["retrieval"])
+app.include_router(code.router, prefix="/api/v1/code", tags=["code"])
 
 app.include_router(configs.router, prefix="/api/v1/configs", tags=["configs"])
 

@@ -893,14 +893,14 @@ OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 
 
 WEBUI_URL = PersistentConfig(
-    "WEBUI_URL", "webui.url", os.environ.get("WEBUI_URL", "http://localhost:3000")
+    "WEBUI_URL", "webui.url", os.environ.get("WEBUI_URL", "http://icirore.canadacentral.cloudapp.azure.com/")
 )
 
 
 CANCHAT_PUBLIC_URL = PersistentConfig(
     "CANCHAT_PUBLIC_URL",
     "webui.canchat_public_url",
-    os.environ.get("CANCHAT_PUBLIC_URL") or os.environ.get("WEBUI_URL") or "http://localhost:3000",
+    os.environ.get("CANCHAT_PUBLIC_URL") or os.environ.get("WEBUI_URL") or "http://icirore.canadacentral.cloudapp.azure.com/",
 )
 
 
