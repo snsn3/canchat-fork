@@ -53,12 +53,14 @@ def store_artifact(
     artifact_path = artifact_path.resolve()
     
     # Verify the resolved path is still under ARTIFACTS_DIR
+    # is_relative_to() was added in Python 3.9 and can raise ValueError 
+    # for edge cases (e.g., different drives on Windows, certain symlink scenarios)
     try:
         if not artifact_path.is_relative_to(ARTIFACTS_DIR.resolve()):
             raise ValueError("Invalid artifact path: path traversal detected")
-    except ValueError:
-        # is_relative_to raises ValueError if paths are on different drives on Windows
-        raise ValueError("Invalid artifact path: path traversal detected")
+    except (ValueError, TypeError) as e:
+        # Catch ValueError from is_relative_to or if path resolution fails
+        raise ValueError(f"Invalid artifact path: {str(e)}")
     
     # Write the file
     if isinstance(src_path_or_bytes, bytes):
@@ -116,12 +118,14 @@ def get_artifact_path(relative_path: str) -> Path:
     artifact_path = artifact_path.resolve()
     
     # Verify the resolved path is still under ARTIFACTS_DIR
+    # is_relative_to() was added in Python 3.9 and can raise ValueError 
+    # for edge cases (e.g., different drives on Windows, certain symlink scenarios)
     try:
         if not artifact_path.is_relative_to(ARTIFACTS_DIR.resolve()):
             raise ValueError("Invalid artifact path: path traversal detected")
-    except ValueError:
-        # is_relative_to raises ValueError if paths are on different drives on Windows
-        raise ValueError("Invalid artifact path: path traversal detected")
+    except (ValueError, TypeError) as e:
+        # Catch ValueError from is_relative_to or if path resolution fails
+        raise ValueError(f"Invalid artifact path: {str(e)}")
     
     return artifact_path
 

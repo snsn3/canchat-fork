@@ -112,12 +112,13 @@ async def download_artifact_content(artifact_id: str, user=Depends(get_verified_
     
     except ValueError as e:
         # Path traversal or invalid path
-        log.error(f"Invalid artifact path: {e}")
+        log.error(f"Invalid artifact path for artifact {artifact_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.DEFAULT("Invalid artifact path"),
         )
     except Exception as e:
+        log.error(f"Error downloading artifact {artifact_id}: {type(e).__name__}")
         log.exception(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -194,6 +195,7 @@ async def delete_artifact(artifact_id: str, user=Depends(get_verified_user)):
                 detail=ERROR_MESSAGES.DEFAULT("Error deleting artifact"),
             )
     except Exception as e:
+        log.error(f"Error deleting artifact {artifact_id}: {type(e).__name__}")
         log.exception(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
