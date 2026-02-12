@@ -53,7 +53,11 @@ def store_artifact(
     artifact_path = artifact_path.resolve()
     
     # Verify the resolved path is still under ARTIFACTS_DIR
-    if not str(artifact_path).startswith(str(ARTIFACTS_DIR.resolve())):
+    try:
+        if not artifact_path.is_relative_to(ARTIFACTS_DIR.resolve()):
+            raise ValueError("Invalid artifact path: path traversal detected")
+    except ValueError:
+        # is_relative_to raises ValueError if paths are on different drives on Windows
         raise ValueError("Invalid artifact path: path traversal detected")
     
     # Write the file
@@ -112,7 +116,11 @@ def get_artifact_path(relative_path: str) -> Path:
     artifact_path = artifact_path.resolve()
     
     # Verify the resolved path is still under ARTIFACTS_DIR
-    if not str(artifact_path).startswith(str(ARTIFACTS_DIR.resolve())):
+    try:
+        if not artifact_path.is_relative_to(ARTIFACTS_DIR.resolve()):
+            raise ValueError("Invalid artifact path: path traversal detected")
+    except ValueError:
+        # is_relative_to raises ValueError if paths are on different drives on Windows
         raise ValueError("Invalid artifact path: path traversal detected")
     
     return artifact_path
