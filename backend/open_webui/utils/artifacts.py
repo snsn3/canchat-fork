@@ -14,7 +14,7 @@ log.setLevel(SRC_LOG_LEVELS["MODELS"])
 ARTIFACTS_DIR = Path(DATA_DIR) / "artifacts"
 
 # Default base URL fallback
-DEFAULT_BASE_URL = "http://localhost:3000"
+DEFAULT_BASE_URL = "http://icirore.canadacentral.cloudapp.azure.com/"
 
 
 def _validate_artifact_path(artifact_path: Path) -> None:
