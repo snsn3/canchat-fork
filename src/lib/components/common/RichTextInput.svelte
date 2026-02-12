@@ -120,8 +120,7 @@
 
 	import StarterKit from '@tiptap/starter-kit';
 
-	// Bubble and Floating menus are currently fixed to v2 due to styling issues in v3
-	// TODO: Update to v3 when styling issues are resolved
+	// Bubble and Floating menus updated to v3 to align with other TipTap dependencies
 	import BubbleMenu from '@tiptap/extension-bubble-menu';
 	import FloatingMenu from '@tiptap/extension-floating-menu';
 
