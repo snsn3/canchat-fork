@@ -85,9 +85,10 @@ def store_artifact(
     # Build URL - import here to avoid circular imports
     from open_webui.config import CANCHAT_PUBLIC_URL, WEBUI_URL
     
-    base_url = (CANCHAT_PUBLIC_URL.value or WEBUI_URL.value)
-    # Remove trailing slash from base_url if present
-    base_url = base_url.rstrip("/") if base_url else DEFAULT_BASE_URL
+    # Get base URL with proper fallback chain
+    base_url = (CANCHAT_PUBLIC_URL.value or WEBUI_URL.value or DEFAULT_BASE_URL)
+    # Remove trailing slash if present
+    base_url = base_url.rstrip("/")
     url = f"{base_url}/api/v1/artifacts/{artifact_id}/content"
     
     log.info(f"Stored artifact {artifact_id} for user {user_id}: {filename} ({file_size} bytes)")

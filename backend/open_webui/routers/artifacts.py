@@ -19,6 +19,15 @@ log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
 router = APIRouter()
 
+
+def get_base_url(request: Request) -> str:
+    """Get the base URL for artifact downloads from config, with fallback."""
+    base_url = (request.app.state.config.CANCHAT_PUBLIC_URL or 
+                request.app.state.config.WEBUI_URL or 
+                DEFAULT_BASE_URL)
+    return base_url.rstrip("/") if base_url else DEFAULT_BASE_URL
+
+
 ############################
 # Get Artifact Metadata
 ############################
@@ -46,8 +55,7 @@ async def get_artifact_metadata(artifact_id: str, request: Request, user=Depends
         )
     
     # Build URL
-    base_url = (request.app.state.config.CANCHAT_PUBLIC_URL or request.app.state.config.WEBUI_URL)
-    base_url = base_url.rstrip("/") if base_url else DEFAULT_BASE_URL
+    base_url = get_base_url(request)
     url = f"{base_url}/api/v1/artifacts/{artifact_id}/content"
     
     return ArtifactResponse(
@@ -61,7 +69,7 @@ async def get_artifact_metadata(artifact_id: str, request: Request, user=Depends
 ############################
 
 
-@router.get("/{artifact_id}/content")
+@router.get("/{artifact_id}/content", summary="Download artifact file")
 async def download_artifact_content(artifact_id: str, user=Depends(get_verified_user)):
     """
     Download the content of a specific artifact.
@@ -143,8 +151,7 @@ async def list_user_artifacts(request: Request, user=Depends(get_verified_user))
         artifacts = Artifacts.get_artifacts_by_user_id(user.id)
     
     # Build URLs for each artifact
-    base_url = (request.app.state.config.CANCHAT_PUBLIC_URL or request.app.state.config.WEBUI_URL)
-    base_url = base_url.rstrip("/") if base_url else DEFAULT_BASE_URL
+    base_url = get_base_url(request)
     
     return [
         ArtifactResponse(
@@ -160,7 +167,7 @@ async def list_user_artifacts(request: Request, user=Depends(get_verified_user))
 ############################
 
 
-@router.delete("/{artifact_id}")
+@router.delete("/{artifact_id}", summary="Delete artifact")
 async def delete_artifact(artifact_id: str, user=Depends(get_verified_user)):
     """
     Delete an artifact.
