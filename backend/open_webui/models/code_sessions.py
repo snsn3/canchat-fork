@@ -108,3 +108,17 @@ class CodeSessions:
                 return True
         except Exception:
             return False
+
+    def update_session_workspace_path(self, id: str, workspace_path: str) -> Optional[CodeSessionModel]:
+        try:
+            with get_db() as db:
+                session = db.query(CodeSession).filter_by(id=id).first()
+                if session:
+                    session.workspace_path = workspace_path
+                    session.updated_at = int(time.time())
+                    db.commit()
+                    db.refresh(session)
+                    return CodeSessionModel.model_validate(session)
+                return None
+        except Exception:
+            return None

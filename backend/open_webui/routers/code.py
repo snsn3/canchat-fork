@@ -66,7 +66,7 @@ async def create_code_session(
         session_id = None
         workspace_path = None
         
-        # Try to create session in database first
+        # Try to create session in database first (with empty workspace path)
         session = code_sessions.insert_new_session(
             user_id=user_id,
             workspace_path=""  # Temporary, will update after creating directory
@@ -85,7 +85,13 @@ async def create_code_session(
         workspace_path.mkdir(parents=True, exist_ok=True)
         
         # Update session with actual workspace path
-        session.workspace_path = str(workspace_path)
+        session = code_sessions.update_session_workspace_path(session_id, str(workspace_path))
+        
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update workspace path"
+            )
         
         log.info(f"Created code session {session_id} for user {user_id}")
         
