@@ -1,17 +1,26 @@
 import { v4 as uuidv4 } from 'uuid';
 import sha256 from 'js-sha256';
+import { WEBUI_BASE_URL } from '$lib/constants';
 
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isToday from 'dayjs/plugin/isToday';
 import isYesterday from 'dayjs/plugin/isYesterday';
+import localizedFormat from 'dayjs/plugin/localizedFormat';
 
 dayjs.extend(relativeTime);
 dayjs.extend(isToday);
 dayjs.extend(isYesterday);
+dayjs.extend(localizedFormat);
 
-import { WEBUI_BASE_URL } from '$lib/constants';
 import { TTS_RESPONSE_SPLIT } from '$lib/types';
+
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
+
+import { marked } from 'marked';
+import markedExtension from '$lib/utils/marked/extension';
+import markedKatexExtension from '$lib/utils/marked/katex-extension';
+import hljs from 'highlight.js';
 
 //////////////////////////
 // Helper functions
@@ -23,47 +32,43 @@ function escapeRegExp(string: string): string {
 	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export const replaceTokens = (content, sourceIds, char, user) => {
-	const charToken = /{{char}}/gi;
-	const userToken = /{{user}}/gi;
-	const videoIdToken = /{{VIDEO_FILE_ID_([a-f0-9-]+)}}/gi; // Regex to capture the video ID
-	const htmlIdToken = /{{HTML_FILE_ID_([a-f0-9-]+)}}/gi; // Regex to capture the HTML ID
+export const replaceTokens = (content, char, user) => {
+	const tokens = [
+		{ regex: /{{char}}/gi, replacement: char },
+		{ regex: /{{user}}/gi, replacement: user },
+		{
+			regex: /{{VIDEO_FILE_ID_([a-f0-9-]+)}}/gi,
+			replacement: (_, fileId) =>
+				`<video src="${WEBUI_BASE_URL}/api/v1/files/${fileId}/content" controls></video>`
+		},
+		{
+			regex: /{{HTML_FILE_ID_([a-f0-9-]+)}}/gi,
+			replacement: (_, fileId) => `<file type="html" id="${fileId}" />`
+		}
+	];
 
-	// Replace {{char}} if char is provided
-	if (char !== undefined && char !== null) {
-		content = content.replace(charToken, char);
-	}
+	// Replace tokens outside code blocks only
+	const processOutsideCodeBlocks = (text, replacementFn) => {
+		return text
+			.split(/(```[\s\S]*?```|`[\s\S]*?`)/)
+			.map((segment) => {
+				return segment.startsWith('```') || segment.startsWith('`')
+					? segment
+					: replacementFn(segment);
+			})
+			.join('');
+	};
 
-	// Replace {{user}} if user is provided
-	if (user !== undefined && user !== null) {
-		content = content.replace(userToken, user);
-	}
-
-	// Replace video ID tags with corresponding <video> elements
-	content = content.replace(videoIdToken, (match, fileId) => {
-		const videoUrl = `${WEBUI_BASE_URL}/api/v1/files/${fileId}/content`;
-		return `<video src="${videoUrl}" controls></video>`;
-	});
-
-	// Replace HTML ID tags with corresponding HTML content
-	content = content.replace(htmlIdToken, (match, fileId) => {
-		const htmlUrl = `${WEBUI_BASE_URL}/api/v1/files/${fileId}/content/html`;
-		return `<iframe src="${htmlUrl}" width="100%" frameborder="0" onload="this.style.height=(this.contentWindow.document.body.scrollHeight+20)+'px';"></iframe>`;
-	});
-
-	// Remove sourceIds from the content and replace them with <source_id>...</source_id>
-	if (Array.isArray(sourceIds)) {
-		sourceIds.forEach((sourceId) => {
-			// Escape special characters in the sourceId
-			const escapedSourceId = escapeRegExp(sourceId);
-
-			// Create a token based on the exact `[sourceId]` string
-			const sourceToken = `\\[${escapedSourceId}\\]`; // Escape special characters for RegExp
-			const sourceRegex = new RegExp(sourceToken, 'g'); // Match all occurrences of [sourceId]
-
-			content = content.replace(sourceRegex, `<source_id data="${sourceId}" />`);
+	// Apply replacements
+	content = processOutsideCodeBlocks(content, (segment) => {
+		tokens.forEach(({ regex, replacement }) => {
+			if (replacement !== undefined && replacement !== null) {
+				segment = segment.replace(regex, replacement);
+			}
 		});
-	}
+
+		return segment;
+	});
 
 	return content;
 };
@@ -73,15 +78,86 @@ export const sanitizeResponseContent = (content: string) => {
 		.replace(/<\|[a-z]*$/, '')
 		.replace(/<\|[a-z]+\|$/, '')
 		.replace(/<$/, '')
-		.replaceAll(/<\|[a-z]+\|>/g, ' ')
 		.replaceAll('<', '&lt;')
 		.replaceAll('>', '&gt;')
+		.replaceAll(/<\|[a-z]+\|>/g, ' ')
 		.trim();
 };
 
 export const processResponseContent = (content: string) => {
+	content = processChineseContent(content);
 	return content.trim();
 };
+
+function isChineseChar(char: string): boolean {
+	return /\p{Script=Han}/u.test(char);
+}
+
+// Tackle "Model output issue not following the standard Markdown/LaTeX format" in Chinese.
+function processChineseContent(content: string): string {
+	// This function is used to process the response content before the response content is rendered.
+	const lines = content.split('\n');
+	const processedLines = lines.map((line) => {
+		if (/[\u4e00-\u9fa5]/.test(line)) {
+			// Problems caused by Chinese parentheses
+			/* Discription:
+			 *   When `*` has Chinese delimiters on the inside, markdown parser ignore bold or italic style.
+			 *   - e.g. `**中文名（English）**中文内容` will be parsed directly,
+			 *          instead of `<strong>中文名（English）</strong>中文内容`.
+			 * Solution:
+			 *   Adding a `space` before and after the bold/italic part can solve the problem.
+			 *   - e.g. `**中文名（English）**中文内容` -> ` **中文名（English）** 中文内容`
+			 * Note:
+			 *   Similar problem was found with English parentheses and other full delimiters,
+			 *   but they are not handled here because they are less likely to appear in LLM output.
+			 *   Change the behavior in future if needed.
+			 */
+			if (line.includes('*')) {
+				// Handle **bold** and *italic*
+				// 1. With Chinese parentheses
+				if (/（|）/.test(line)) {
+					line = processChineseDelimiters(line, '**', '（', '）');
+					line = processChineseDelimiters(line, '*', '（', '）');
+				}
+				// 2. With Chinese quotations
+				if (/“|”/.test(line)) {
+					line = processChineseDelimiters(line, '**', '“', '”');
+					line = processChineseDelimiters(line, '*', '“', '”');
+				}
+			}
+		}
+		return line;
+	});
+	content = processedLines.join('\n');
+
+	return content;
+}
+
+// Helper function for `processChineseContent`
+function processChineseDelimiters(
+	line: string,
+	symbol: string,
+	leftSymbol: string,
+	rightSymbol: string
+): string {
+	// NOTE: If needed, with a little modification, this function can be applied to more cases.
+	const escapedSymbol = escapeRegExp(symbol);
+	const regex = new RegExp(
+		`(.?)(?<!${escapedSymbol})(${escapedSymbol})([^${escapedSymbol}]+)(${escapedSymbol})(?!${escapedSymbol})(.)`,
+		'g'
+	);
+	return line.replace(regex, (match, l, left, content, right, r) => {
+		const result =
+			(content.startsWith(leftSymbol) && l && l.length > 0 && isChineseChar(l[l.length - 1])) ||
+			(content.endsWith(rightSymbol) && r && r.length > 0 && isChineseChar(r[0]));
+
+		if (result) {
+			return `${l} ${left}${content}${right} ${r}`;
+		} else {
+			return match;
+		}
+	});
+}
 
 export function unescapeHtml(html: string) {
 	const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -126,22 +202,12 @@ export const convertMessagesToHistory = (messages) => {
 			];
 		}
 
-		// Ensure message has proper done flag - if content exists and no error, mark as done
-		const processedMessage = {
+		history.messages[messageId] = {
 			...message,
 			id: messageId,
 			parentId: parentMessageId,
-			childrenIds: [],
-			// Fix for skeleton bug: ensure done is properly set for completed messages
-			// CrewAI responses should always be marked as done if they have content
-			done:
-				message.done !== undefined
-					? message.done
-					: (message.content && message.content.trim() !== '' && !message.error) ||
-						(message.crewAI && message.content && message.content.trim() !== '')
+			childrenIds: []
 		};
-
-		history.messages[messageId] = processedMessage;
 
 		parentMessageId = messageId;
 	}
@@ -258,7 +324,8 @@ export const compressImage = async (imageUrl, maxWidth, maxHeight) => {
 			context.drawImage(img, 0, 0, width, height);
 
 			// Get compressed image URL
-			const compressedUrl = canvas.toDataURL();
+			const mimeType = imageUrl.match(/^data:([^;]+);/)?.[1];
+			const compressedUrl = canvas.toDataURL(mimeType);
 			resolve(compressedUrl);
 		};
 		img.onerror = (error) => reject(error);
@@ -275,7 +342,7 @@ export const generateInitialsImage = (name) => {
 		console.log(
 			'generateInitialsImage: failed pixel test, fingerprint evasion is likely. Using default image.'
 		);
-		return '/user.png';
+		return `${WEBUI_BASE_URL}/user.png`;
 	}
 
 	ctx.fillStyle = '#F39C12';
@@ -302,54 +369,146 @@ export const generateInitialsImage = (name) => {
 
 export const formatDate = (inputDate) => {
 	const date = dayjs(inputDate);
-	const now = dayjs();
 
 	if (date.isToday()) {
-		return `Today at ${date.format('HH:mm')}`;
+		return `Today at {{LOCALIZED_TIME}}`;
 	} else if (date.isYesterday()) {
-		return `Yesterday at ${date.format('HH:mm')}`;
+		return `Yesterday at {{LOCALIZED_TIME}}`;
 	} else {
-		return `${date.format('DD/MM/YYYY')} at ${date.format('HH:mm')}`;
+		return `{{LOCALIZED_DATE}} at {{LOCALIZED_TIME}}`;
 	}
 };
 
-export const copyToClipboard = async (text) => {
-	let result = false;
-	if (!navigator.clipboard) {
-		const textArea = document.createElement('textarea');
-		textArea.value = text;
+export const copyToClipboard = async (text, html = null, formatted = false) => {
+	if (formatted) {
+		let styledHtml = '';
+		if (!html) {
+			const options = {
+				throwOnError: false,
+				highlight: function (code, lang) {
+					const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+					return hljs.highlight(code, { language }).value;
+				}
+			};
+			marked.use(markedKatexExtension(options));
+			marked.use(markedExtension(options));
+			// DEVELOPER NOTE: Go to `$lib/components/chat/Messages/Markdown.svelte` to add extra markdown extensions for rendering.
 
-		// Avoid scrolling to bottom
-		textArea.style.top = '0';
-		textArea.style.left = '0';
-		textArea.style.position = 'fixed';
+			const htmlContent = marked.parse(text);
 
-		document.body.appendChild(textArea);
-		textArea.focus();
-		textArea.select();
-
-		try {
-			document.execCommand('copy');
-			result = true;
-		} catch (err) {
-			console.error('Fallback: Oops, unable to copy', err);
+			// Add basic styling to make the content look better when pasted
+			styledHtml = `
+			<div>
+				<style>
+					pre {
+						background-color: #f6f8fa;
+						border-radius: 6px;
+						padding: 16px;
+						overflow: auto;
+					}
+					code {
+						font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+						font-size: 14px;
+					}
+					.hljs-keyword { color: #d73a49; }
+					.hljs-string { color: #032f62; }
+					.hljs-comment { color: #6a737d; }
+					.hljs-function { color: #6f42c1; }
+					.hljs-number { color: #005cc5; }
+					.hljs-operator { color: #d73a49; }
+					.hljs-class { color: #6f42c1; }
+					.hljs-title { color: #6f42c1; }
+					.hljs-params { color: #24292e; }
+					.hljs-built_in { color: #005cc5; }
+					blockquote {
+						border-left: 4px solid #dfe2e5;
+						padding-left: 16px;
+						color: #6a737d;
+						margin-left: 0;
+						margin-right: 0;
+					}
+					table {
+						border-collapse: collapse;
+						width: 100%;
+						margin-bottom: 16px;
+					}
+					table, th, td {
+						border: 1px solid #dfe2e5;
+					}
+					th, td {
+						padding: 8px 12px;
+					}
+					th {
+						background-color: #f6f8fa;
+					}
+				</style>
+				${htmlContent}
+			</div>
+		`;
+		} else {
+			// If HTML is provided, use it directly
+			styledHtml = html;
 		}
 
-		document.body.removeChild(textArea);
+		// Create a blob with HTML content
+		const blob = new Blob([styledHtml], { type: 'text/html' });
+
+		try {
+			// Create a ClipboardItem with HTML content
+			const data = new ClipboardItem({
+				'text/html': blob,
+				'text/plain': new Blob([text], { type: 'text/plain' })
+			});
+
+			// Write to clipboard
+			await navigator.clipboard.write([data]);
+			return true;
+		} catch (err) {
+			console.error('Error copying formatted content:', err);
+			// Fallback to plain text
+			return await copyToClipboard(text);
+		}
+	} else {
+		let result = false;
+		if (!navigator.clipboard) {
+			const textArea = document.createElement('textarea');
+			textArea.value = text;
+
+			// Avoid scrolling to bottom
+			textArea.style.top = '0';
+			textArea.style.left = '0';
+			textArea.style.position = 'fixed';
+
+			document.body.appendChild(textArea);
+			textArea.focus();
+			textArea.select();
+
+			try {
+				const successful = document.execCommand('copy');
+				const msg = successful ? 'successful' : 'unsuccessful';
+				console.log('Fallback: Copying text command was ' + msg);
+				result = true;
+			} catch (err) {
+				console.error('Fallback: Oops, unable to copy', err);
+			}
+
+			document.body.removeChild(textArea);
+			return result;
+		}
+
+		result = await navigator.clipboard
+			.writeText(text)
+			.then(() => {
+				console.log('Async: Copying to clipboard was successful!');
+				return true;
+			})
+			.catch((error) => {
+				console.error('Async: Could not copy text: ', error);
+				return false;
+			});
+
 		return result;
 	}
-
-	result = await navigator.clipboard
-		.writeText(text)
-		.then(() => {
-			return true;
-		})
-		.catch((error) => {
-			console.error('Async: Could not copy text: ', error);
-			return false;
-		});
-
-	return result;
 };
 
 export const compareVersion = (latest, current) => {
@@ -362,14 +521,14 @@ export const compareVersion = (latest, current) => {
 			}) < 0;
 };
 
-export const findWordIndices = (text) => {
-	const regex = /\[([^\]]+)\]/g;
+export const extractCurlyBraceWords = (text) => {
+	const regex = /\{\{([^}]+)\}\}/g;
 	const matches = [];
 	let match;
 
 	while ((match = regex.exec(text)) !== null) {
 		matches.push({
-			word: match[1],
+			word: match[1].trim(),
 			startIndex: match.index,
 			endIndex: regex.lastIndex - 1
 		});
@@ -379,6 +538,7 @@ export const findWordIndices = (text) => {
 };
 
 export const removeLastWordFromString = (inputString, wordString) => {
+	console.log('inputString', inputString);
 	// Split the string by newline characters to handle lines separately
 	const lines = inputString.split('\n');
 
@@ -403,6 +563,9 @@ export const removeLastWordFromString = (inputString, wordString) => {
 
 	// Combine the lines together again, placing the updated last line back in
 	const resultString = [...lines, updatedLastLine].join('\n');
+
+	// Return the final string
+	console.log('resultString', resultString);
 
 	return resultString;
 };
@@ -605,7 +768,7 @@ export const convertOpenAIChats = (_chats) => {
 				user_id: '',
 				title: convo['title'],
 				chat: chat,
-				timestamp: convo['timestamp']
+				timestamp: convo['create_time']
 			});
 		} else {
 			failed++;
@@ -625,6 +788,15 @@ export const isValidHttpUrl = (string: string) => {
 	}
 
 	return url.protocol === 'http:' || url.protocol === 'https:';
+};
+
+export const isYoutubeUrl = (url: string) => {
+	return (
+		url.startsWith('https://www.youtube.com') ||
+		url.startsWith('https://youtu.be') ||
+		url.startsWith('https://youtube.com') ||
+		url.startsWith('https://m.youtube.com')
+	);
 };
 
 export const removeEmojis = (str: string) => {
@@ -660,7 +832,6 @@ export const removeFormattings = (str: string) => {
 
 			// Cleanup
 			.replace(/\[\^[^\]]*\]/g, '') // Footnotes
-			.replace(/[-*_~]/g, '') // Remaining markers
 			.replace(/\n{2,}/g, '\n')
 	); // Multiple newlines
 };
@@ -669,8 +840,44 @@ export const cleanText = (content: string) => {
 	return removeFormattings(removeEmojis(content.trim()));
 };
 
-export const removeDetailsWithReasoning = (content) => {
-	return content.replace(/<details\s+type="reasoning"[^>]*>.*?<\/details>/gis, '').trim();
+export const removeDetails = (content, types) => {
+	for (const type of types) {
+		content = content.replace(
+			new RegExp(`<details\\s+type="${type}"[^>]*>.*?<\\/details>`, 'gis'),
+			''
+		);
+	}
+
+	return content;
+};
+
+export const removeAllDetails = (content) => {
+	content = content.replace(/<details[^>]*>.*?<\/details>/gis, '');
+	return content;
+};
+
+export const processDetails = (content) => {
+	content = removeDetails(content, ['reasoning', 'code_interpreter']);
+
+	// This regex matches <details> tags with type="tool_calls" and captures their attributes to convert them to a string
+	const detailsRegex = /<details\s+type="tool_calls"([^>]*)>([\s\S]*?)<\/details>/gis;
+	const matches = content.match(detailsRegex);
+	if (matches) {
+		for (const match of matches) {
+			const attributesRegex = /(\w+)="([^"]*)"/g;
+			const attributes = {};
+			let attributeMatch;
+			while ((attributeMatch = attributesRegex.exec(match)) !== null) {
+				attributes[attributeMatch[1]] = attributeMatch[2];
+			}
+
+			if (attributes.result) {
+				content = content.replace(match, `"${attributes.result}"`);
+			}
+		}
+	}
+
+	return content;
 };
 
 // This regular expression matches code blocks marked by triple backticks
@@ -687,8 +894,8 @@ export const extractSentences = (text: string) => {
 		return placeholder;
 	});
 
-	// Split the modified text into sentences based on common punctuation marks, avoiding these blocks
-	let sentences = text.split(/(?<=[.!?])\s+/);
+	// Split the modified text into sentences based on common punctuation marks or newlines, avoiding these blocks
+	let sentences = text.split(/(?<=[.!?])\s+|\n+/);
 
 	// Restore code blocks and process sentences
 	sentences = sentences.map((sentence) => {
@@ -741,11 +948,10 @@ export const extractSentencesForAudio = (text: string) => {
 	}, [] as string[]);
 };
 
-export const getMessageContentParts = (content: string, split_on: string = 'punctuation') => {
-	content = removeDetailsWithReasoning(content);
+export const getMessageContentParts = (content: string, splitOn: string = 'punctuation') => {
 	const messageContentParts: string[] = [];
 
-	switch (split_on) {
+	switch (splitOn) {
 		default:
 		case TTS_RESPONSE_SPLIT.PUNCTUATION:
 			messageContentParts.push(...extractSentencesForAudio(content));
@@ -767,56 +973,17 @@ export const blobToFile = (blob, fileName) => {
 	return file;
 };
 
-/**
- * @param {string} template - The template string containing placeholders.
- * @returns {string} The template string with the placeholders replaced by the prompt.
- */
-export const promptTemplate = (
-	template: string,
-	user_name?: string,
-	user_location?: string,
-	user_timezone?: string
-): string => {
-	// Use user's timezone if provided, otherwise fall back to Eastern Time (Toronto)
-	const timeZone = user_timezone || 'America/Toronto';
-
-	// Get current date/time information for the specified timezone
-	const {
-		date: formattedDate,
-		time: formattedTime,
-		weekday: currentWeekday
-	} = getCurrentDateTimeForTimezone(timeZone);
-
-	// Get the user's language
-	const userLanguage = localStorage.getItem('locale') || 'en-US';
-
-	// Replace template variables
-	template = template.replace('{{CURRENT_DATETIME}}', `${formattedDate} ${formattedTime}`);
-	template = template.replace('{{CURRENT_DATE}}', formattedDate);
-	template = template.replace('{{CURRENT_TIME}}', formattedTime);
-	template = template.replace('{{CURRENT_WEEKDAY}}', currentWeekday);
-	template = template.replace('{{CURRENT_TIMEZONE}}', timeZone);
-
-	// Auto-append current time to system prompts for temporal context
-	// This ensures models always have access to current time without user needing to add template variables
-	if (template && !template.includes('current date and time') && !template.includes('{{CURRENT_')) {
-		template = `${template}${template.trim() ? '\n\n' : ''}The current date and time is ${formattedDate} ${formattedTime}. Today is ${currentWeekday}.`;
-	}
-
-	// Replace {{USER_LANGUAGE}} in the template with the user's language
-	template = template.replace('{{USER_LANGUAGE}}', userLanguage);
-
-	if (user_name) {
-		// Replace {{USER_NAME}} in the template with the user's name
-		template = template.replace('{{USER_NAME}}', user_name);
-	}
-
-	if (user_location) {
-		// Replace {{USER_LOCATION}} in the template with the current location
-		template = template.replace('{{USER_LOCATION}}', user_location);
-	}
-
-	return template;
+export const getPromptVariables = (user_name, user_location) => {
+	return {
+		'{{USER_NAME}}': user_name,
+		'{{USER_LOCATION}}': user_location || 'Unknown',
+		'{{CURRENT_DATETIME}}': getCurrentDateTime(),
+		'{{CURRENT_DATE}}': getFormattedDate(),
+		'{{CURRENT_TIME}}': getFormattedTime(),
+		'{{CURRENT_WEEKDAY}}': getWeekday(),
+		'{{CURRENT_TIMEZONE}}': getUserTimezone(),
+		'{{USER_LANGUAGE}}': localStorage.getItem('locale') || 'en-US'
+	};
 };
 
 /**
@@ -852,8 +1019,6 @@ export const titleGenerationTemplate = (template: string, prompt: string): strin
 			return '';
 		}
 	);
-
-	template = promptTemplate(template);
 
 	return template;
 };
@@ -967,32 +1132,20 @@ export const bestMatchingLanguage = (supportedLanguages, preferredLanguages, def
 
 // Get the date in the format YYYY-MM-DD
 export const getFormattedDate = () => {
-	// Use Eastern Time (America/New_York) which handles EST/EDT automatically
 	const date = new Date();
-	const easternDate = new Intl.DateTimeFormat('en-CA', {
-		timeZone: 'America/New_York',
-		year: 'numeric',
-		month: '2-digit',
-		day: '2-digit'
-	}).format(date);
-	return easternDate;
+	const year = date.getFullYear();
+	const month = String(date.getMonth() + 1).padStart(2, '0');
+	const day = String(date.getDate()).padStart(2, '0');
+	return `${year}-${month}-${day}`;
 };
 
-// Get the time in the format HH:MM:SS AM/PM EST/EDT
+// Get the time in the format HH:MM:SS
 export const getFormattedTime = () => {
 	const date = new Date();
-	const easternTime = new Intl.DateTimeFormat('en-US', {
-		timeZone: 'America/New_York',
-		hour: '2-digit',
-		minute: '2-digit',
-		second: '2-digit',
-		hour12: true,
-		timeZoneName: 'short'
-	}).format(date);
-	return easternTime;
+	return date.toTimeString().split(' ')[0];
 };
 
-// Get the current date and time in Eastern Time format
+// Get the current date and time in the format YYYY-MM-DD HH:MM:SS
 export const getCurrentDateTime = () => {
 	return `${getFormattedDate()} ${getFormattedTime()}`;
 };
@@ -1002,39 +1155,11 @@ export const getUserTimezone = () => {
 	return Intl.DateTimeFormat().resolvedOptions().timeZone;
 };
 
-// Get the weekday in specified timezone (defaults to Eastern Time - Toronto)
-export const getWeekday = (timeZone: string = 'America/Toronto') => {
+// Get the weekday
+export const getWeekday = () => {
 	const date = new Date();
-	const weekday = new Intl.DateTimeFormat('en-US', {
-		timeZone: timeZone,
-		weekday: 'long'
-	}).format(date);
-	return weekday;
-};
-
-// Get current date and time formatted for a specific timezone
-export const getCurrentDateTimeForTimezone = (timeZone: string = 'America/Toronto') => {
-	const date = new Date();
-	const formattedDate = date.toLocaleDateString('en-CA', { timeZone }); // YYYY-MM-DD format
-	const formattedTime = date.toLocaleTimeString('en-US', {
-		hour: 'numeric',
-		minute: 'numeric',
-		second: 'numeric',
-		hour12: true,
-		timeZone: timeZone,
-		timeZoneName: 'short'
-	});
-	const weekday = date.toLocaleDateString('en-US', {
-		weekday: 'long',
-		timeZone: timeZone
-	});
-
-	return {
-		date: formattedDate,
-		time: formattedTime,
-		weekday: weekday,
-		datetime: `${formattedDate} ${formattedTime}`
-	};
+	const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+	return weekdays[date.getDay()];
 };
 
 export const createMessagesList = (history, messageId) => {
@@ -1043,6 +1168,9 @@ export const createMessagesList = (history, messageId) => {
 	}
 
 	const message = history.messages[messageId];
+	if (message === undefined) {
+		return [];
+	}
 	if (message?.parentId) {
 		return [...createMessagesList(history, message.parentId), message];
 	} else {
@@ -1065,5 +1193,495 @@ export const formatFileSize = (size) => {
 };
 
 export const getLineCount = (text) => {
+	console.log(typeof text);
 	return text ? text.split('\n').length : 0;
+};
+
+// Helper function to recursively resolve OpenAPI schema into JSON schema format
+function resolveSchema(schemaRef, components, resolvedSchemas = new Set()) {
+	if (!schemaRef) return {};
+
+	if (schemaRef['$ref']) {
+		const refPath = schemaRef['$ref'];
+		const schemaName = refPath.split('/').pop();
+
+		if (resolvedSchemas.has(schemaName)) {
+			// Avoid infinite recursion on circular references
+			return {};
+		}
+		resolvedSchemas.add(schemaName);
+		const referencedSchema = components.schemas[schemaName];
+		return resolveSchema(referencedSchema, components, resolvedSchemas);
+	}
+
+	if (schemaRef.type) {
+		const schemaObj = { type: schemaRef.type };
+
+		if (schemaRef.description) {
+			schemaObj.description = schemaRef.description;
+		}
+
+		switch (schemaRef.type) {
+			case 'object':
+				schemaObj.properties = {};
+				schemaObj.required = schemaRef.required || [];
+				for (const [propName, propSchema] of Object.entries(schemaRef.properties || {})) {
+					schemaObj.properties[propName] = resolveSchema(propSchema, components);
+				}
+				break;
+
+			case 'array':
+				schemaObj.items = resolveSchema(schemaRef.items, components);
+				break;
+
+			default:
+				// for primitive types (string, integer, etc.), just use as is
+				break;
+		}
+		return schemaObj;
+	}
+
+	// fallback for schemas without explicit type
+	return {};
+}
+
+// Main conversion function
+export const convertOpenApiToToolPayload = (openApiSpec) => {
+	const toolPayload = [];
+
+	// Guard against invalid or non-OpenAPI specs (e.g., MCP-style configs)
+	if (!openApiSpec || !openApiSpec.paths) {
+		return toolPayload;
+	}
+
+	for (const [path, methods] of Object.entries(openApiSpec.paths)) {
+		for (const [method, operation] of Object.entries(methods)) {
+			if (operation?.operationId) {
+				const tool = {
+					name: operation.operationId,
+					description: operation.description || operation.summary || 'No description available.',
+					parameters: {
+						type: 'object',
+						properties: {},
+						required: []
+					}
+				};
+
+				// Extract path and query parameters
+				if (operation.parameters) {
+					operation.parameters.forEach((param) => {
+						let description = param.schema.description || param.description || '';
+						if (param.schema.enum && Array.isArray(param.schema.enum)) {
+							description += `. Possible values: ${param.schema.enum.join(', ')}`;
+						}
+						tool.parameters.properties[param.name] = {
+							type: param.schema.type,
+							description: description
+						};
+
+						if (param.required) {
+							tool.parameters.required.push(param.name);
+						}
+					});
+				}
+
+				// Extract and recursively resolve requestBody if available
+				if (operation.requestBody) {
+					const content = operation.requestBody.content;
+					if (content && content['application/json']) {
+						const requestSchema = content['application/json'].schema;
+						const resolvedRequestSchema = resolveSchema(requestSchema, openApiSpec.components);
+
+						if (resolvedRequestSchema.properties) {
+							tool.parameters.properties = {
+								...tool.parameters.properties,
+								...resolvedRequestSchema.properties
+							};
+
+							if (resolvedRequestSchema.required) {
+								tool.parameters.required = [
+									...new Set([...tool.parameters.required, ...resolvedRequestSchema.required])
+								];
+							}
+						} else if (resolvedRequestSchema.type === 'array') {
+							tool.parameters = resolvedRequestSchema; // special case when root schema is an array
+						}
+					}
+				}
+
+				toolPayload.push(tool);
+			}
+		}
+	}
+
+	return toolPayload;
+};
+
+export const slugify = (str: string): string => {
+	return (
+		str
+			// 1. Normalize: separate accented letters into base + combining marks
+			.normalize('NFD')
+			// 2. Remove all combining marks (the accents)
+			.replace(/[\u0300-\u036f]/g, '')
+			// 3. Replace any sequence of whitespace with a single hyphen
+			.replace(/\s+/g, '-')
+			// 4. Remove all characters except alphanumeric characters, hyphens, and underscores
+			.replace(/[^a-zA-Z0-9-_]/g, '')
+			// 5. Convert to lowercase
+			.toLowerCase()
+	);
+};
+
+export const extractInputVariables = (text: string): Record<string, any> => {
+	const regex = /{{\s*([^|}\s]+)\s*\|\s*([^}]+)\s*}}/g;
+	const regularRegex = /{{\s*([^|}\s]+)\s*}}/g;
+	const variables: Record<string, any> = {};
+	let match;
+	// Use exec() loop instead of matchAll() for better compatibility
+	while ((match = regex.exec(text)) !== null) {
+		const varName = match[1].trim();
+		const definition = match[2].trim();
+		variables[varName] = parseVariableDefinition(definition);
+	}
+	// Then, extract regular variables (without pipe) - only if not already processed
+	while ((match = regularRegex.exec(text)) !== null) {
+		const varName = match[1].trim();
+		// Only add if not already processed as custom variable
+		if (!variables.hasOwnProperty(varName)) {
+			variables[varName] = { type: 'text' }; // Default type for regular variables
+		}
+	}
+	return variables;
+};
+
+export const splitProperties = (str: string, delimiter: string): string[] => {
+	const result: string[] = [];
+	let current = '';
+	let depth = 0;
+	let inString = false;
+	let escapeNext = false;
+
+	for (let i = 0; i < str.length; i++) {
+		const char = str[i];
+
+		if (escapeNext) {
+			current += char;
+			escapeNext = false;
+			continue;
+		}
+
+		if (char === '\\') {
+			current += char;
+			escapeNext = true;
+			continue;
+		}
+
+		if (char === '"' && !escapeNext) {
+			inString = !inString;
+			current += char;
+			continue;
+		}
+
+		if (!inString) {
+			if (char === '{' || char === '[') {
+				depth++;
+			} else if (char === '}' || char === ']') {
+				depth--;
+			}
+
+			if (char === delimiter && depth === 0) {
+				result.push(current.trim());
+				current = '';
+				continue;
+			}
+		}
+
+		current += char;
+	}
+
+	if (current.trim()) {
+		result.push(current.trim());
+	}
+
+	return result;
+};
+
+export const parseVariableDefinition = (definition: string): Record<string, any> => {
+	// Use splitProperties for the main colon delimiter to handle quoted strings
+	const parts = splitProperties(definition, ':');
+	const [firstPart, ...propertyParts] = parts;
+
+	// Parse type (explicit or implied)
+	const type = firstPart.startsWith('type=') ? firstPart.slice(5) : firstPart;
+
+	// Parse properties; support both key=value and bare flags (e.g., ":required")
+	const properties = propertyParts.reduce(
+		(props, part) => {
+			const trimmed = part.trim();
+			if (!trimmed) return props;
+
+			// Use splitProperties for the equals sign as well, in case there are nested quotes
+			const equalsParts = splitProperties(trimmed, '=');
+
+			if (equalsParts.length === 1) {
+				// It's a flag with no value, e.g. "required" -> true
+				const flagName = equalsParts[0].trim();
+				if (flagName.length > 0) {
+					return { ...props, [flagName]: true };
+				}
+				return props;
+			}
+
+			const [propertyName, ...valueParts] = equalsParts;
+			const propertyValueRaw = valueParts.join('='); // Handle values with extra '='
+
+			if (!propertyName || propertyValueRaw == null) return props;
+
+			return {
+				...props,
+				[propertyName.trim()]: parseJsonValue(propertyValueRaw.trim())
+			};
+		},
+		{} as Record<string, any>
+	);
+
+	return { type, ...properties };
+};
+export const parseJsonValue = (value: string): any => {
+	// Remove surrounding quotes if present (for string values)
+	if (value.startsWith('"') && value.endsWith('"')) {
+		return value.slice(1, -1);
+	}
+
+	// Check if it starts with square or curly brackets (JSON)
+	if (/^[\[{]/.test(value)) {
+		try {
+			return JSON.parse(value);
+		} catch {
+			return value; // Return as string if JSON parsing fails
+		}
+	}
+
+	return value;
+};
+
+async function ensurePDFjsLoaded() {
+	if (!window.pdfjsLib) {
+		const pdfjs = await import('pdfjs-dist');
+		pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+		if (!window.pdfjsLib) {
+			throw new Error('pdfjsLib is required for PDF extraction');
+		}
+	}
+	return window.pdfjsLib;
+}
+
+export const extractContentFromFile = async (file: File) => {
+	// Known text file extensions for extra fallback
+	const textExtensions = [
+		'.txt',
+		'.md',
+		'.csv',
+		'.json',
+		'.js',
+		'.ts',
+		'.css',
+		'.html',
+		'.xml',
+		'.yaml',
+		'.yml',
+		'.rtf'
+	];
+
+	function getExtension(filename: string) {
+		const dot = filename.lastIndexOf('.');
+		return dot === -1 ? '' : filename.substr(dot).toLowerCase();
+	}
+
+	// Uses pdfjs to extract text from PDF
+	async function extractPdfText(file: File) {
+		const pdfjsLib = await ensurePDFjsLoaded();
+		const arrayBuffer = await file.arrayBuffer();
+		const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+		let allText = '';
+		for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+			const page = await pdf.getPage(pageNum);
+			const content = await page.getTextContent();
+			const strings = content.items.map((item: any) => item.str);
+			allText += strings.join(' ') + '\n';
+		}
+		return allText;
+	}
+
+	// Reads file as text using FileReader
+	function readAsText(file: File) {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(reader.result);
+			reader.onerror = reject;
+			reader.readAsText(file);
+		});
+	}
+
+	async function extractDocxText(file: File) {
+		const [arrayBuffer, { default: mammoth }] = await Promise.all([
+			file.arrayBuffer(),
+			import('mammoth')
+		]);
+		const result = await mammoth.extractRawText({ arrayBuffer });
+		return result.value; // plain text
+	}
+
+	const type = file.type || '';
+	const ext = getExtension(file.name);
+
+	// PDF check
+	if (type === 'application/pdf' || ext === '.pdf') {
+		return await extractPdfText(file);
+	}
+
+	// DOCX check
+	if (
+		type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+		ext === '.docx'
+	) {
+		return await extractDocxText(file);
+	}
+
+	// Text check (plain or common text-based)
+	if (type.startsWith('text/') || textExtensions.includes(ext)) {
+		return await readAsText(file);
+	}
+
+	// Fallback: try to read as text, if decodable
+	try {
+		return await readAsText(file);
+	} catch (err) {
+		throw new Error('Unsupported or non-text file type: ' + (file.name || type));
+	}
+};
+
+export const getAge = (birthDate) => {
+	const today = new Date();
+	const bDate = new Date(birthDate);
+	let age = today.getFullYear() - bDate.getFullYear();
+	const m = today.getMonth() - bDate.getMonth();
+
+	if (m < 0 || (m === 0 && today.getDate() < bDate.getDate())) {
+		age--;
+	}
+	return age.toString();
+};
+
+export const convertHeicToJpeg = async (file: File) => {
+	const { default: heic2any } = await import('heic2any');
+	try {
+		return await heic2any({ blob: file, toType: 'image/jpeg' });
+	} catch (err: any) {
+		if (err?.message?.includes('already browser readable')) {
+			return file;
+		}
+		throw err;
+	}
+};
+
+export const decodeString = (str: string) => {
+	try {
+		return decodeURIComponent(str);
+	} catch (e) {
+		return str;
+	}
+};
+
+export const initMermaid = async () => {
+	const { default: mermaid } = await import('mermaid');
+	mermaid.initialize({
+		startOnLoad: false, // Should be false when using render API
+		theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
+		securityLevel: 'loose'
+	});
+	return mermaid;
+};
+
+export const renderMermaidDiagram = async (mermaid, code: string) => {
+	const parseResult = await mermaid.parse(code, { suppressErrors: false });
+	if (parseResult) {
+		const { svg } = await mermaid.render(`mermaid-${uuidv4()}`, code);
+		return svg;
+	}
+	return '';
+};
+
+export const renderVegaVisualization = async (spec: string, i18n?: any) => {
+	const vega = await import('vega');
+	const parsedSpec = JSON.parse(spec);
+	let vegaSpec = parsedSpec;
+	if (parsedSpec.$schema && parsedSpec.$schema.includes('vega-lite')) {
+		const vegaLite = await import('vega-lite');
+		vegaSpec = vegaLite.compile(parsedSpec).spec;
+	}
+	const view = new vega.View(vega.parse(vegaSpec), { renderer: 'none' });
+	const svg = await view.toSVG();
+	return svg;
+};
+
+export const getCodeBlockContents = (content: string): object => {
+	const codeBlockContents = content.match(/```[\s\S]*?```/g);
+
+	let codeBlocks = [];
+
+	let htmlContent = '';
+	let cssContent = '';
+	let jsContent = '';
+
+	if (codeBlockContents) {
+		codeBlockContents.forEach((block) => {
+			const lang = block.split('\n')[0].replace('```', '').trim().toLowerCase();
+			const code = block.replace(/```[\s\S]*?\n/, '').replace(/```$/, '');
+			codeBlocks.push({ lang, code });
+		});
+
+		codeBlocks.forEach((block) => {
+			const { lang, code } = block;
+
+			if (lang === 'html') {
+				htmlContent += code + '\n';
+			} else if (lang === 'css') {
+				cssContent += code + '\n';
+			} else if (lang === 'javascript' || lang === 'js') {
+				jsContent += code + '\n';
+			}
+		});
+	} else {
+		const inlineHtml = content.match(/<html>[\s\S]*?<\/html>/gi);
+		const inlineCss = content.match(/<style>[\s\S]*?<\/style>/gi);
+		const inlineJs = content.match(/<script>[\s\S]*?<\/script>/gi);
+
+		if (inlineHtml) {
+			inlineHtml.forEach((block) => {
+				const content = block.replace(/<\/?html>/gi, ''); // Remove <html> tags
+				htmlContent += content + '\n';
+			});
+		}
+		if (inlineCss) {
+			inlineCss.forEach((block) => {
+				const content = block.replace(/<\/?style>/gi, ''); // Remove <style> tags
+				cssContent += content + '\n';
+			});
+		}
+		if (inlineJs) {
+			inlineJs.forEach((block) => {
+				const content = block.replace(/<\/?script>/gi, ''); // Remove <script> tags
+				jsContent += content + '\n';
+			});
+		}
+	}
+
+	return {
+		codeBlocks: codeBlocks,
+		html: htmlContent.trim(),
+		css: cssContent.trim(),
+		js: jsContent.trim()
+	};
 };

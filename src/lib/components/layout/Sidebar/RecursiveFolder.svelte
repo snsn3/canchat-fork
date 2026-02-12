@@ -8,6 +8,26 @@
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
 
+	import { goto } from '$app/navigation';
+	import { toast } from 'svelte-sonner';
+
+	import { chatId, mobile, selectedFolder, showSidebar } from '$lib/stores';
+
+	import {
+		deleteFolderById,
+		updateFolderIsExpandedById,
+		updateFolderById,
+		updateFolderParentIdById,
+		getFolderById
+	} from '$lib/apis/folders';
+	import {
+		getChatById,
+		getChatsByFolderId,
+		getChatListByFolderId,
+		updateChatFolderIdById,
+		importChats
+	} from '$lib/apis/chats';
+
 	import ChevronDown from '../../icons/ChevronDown.svelte';
 	import ChevronRight from '../../icons/ChevronRight.svelte';
 	import Collapsible from '../../common/Collapsible.svelte';
@@ -15,43 +35,41 @@
 
 	import FolderOpen from '$lib/components/icons/FolderOpen.svelte';
 	import EllipsisHorizontal from '$lib/components/icons/EllipsisHorizontal.svelte';
-	import {
-		deleteFolderById,
-		updateFolderIsExpandedById,
-		updateFolderNameById,
-		updateFolderParentIdById
-	} from '$lib/apis/folders';
-	import { toast } from 'svelte-sonner';
-	import {
-		getChatById,
-		getChatsByFolderId,
-		importChat,
-		updateChatFolderIdById
-	} from '$lib/apis/chats';
+
 	import ChatItem from './ChatItem.svelte';
 	import FolderMenu from './Folders/FolderMenu.svelte';
 	import DeleteConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
-	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import FolderModal from './Folders/FolderModal.svelte';
+	import Emoji from '$lib/components/common/Emoji.svelte';
+	import Spinner from '$lib/components/common/Spinner.svelte';
 
+	export let folderRegistry = {};
 	export let open = false;
 
 	export let folders;
 	export let folderId;
+	export let shiftKey = false;
 
 	export let className = '';
 
+	export let deleteFolderContents = true;
+
 	export let parentDragged = false;
+
+	export let onDelete = (e) => {};
+	export let onItemMove = (e) => {};
 
 	let folderElement;
 
+	let showFolderModal = false;
 	let edit = false;
 
 	let draggedOver = false;
 	let dragged = false;
 
-	let name = '';
+	let clickTimer = null;
 
-	let buttonID = `${folderId}`;
+	let name = '';
 
 	const onDragOver = (e) => {
 		e.preventDefault();
@@ -70,6 +88,8 @@
 		}
 
 		if (folderElement.contains(e.target)) {
+			console.log('Dropped on the Button');
+
 			if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
 				// Iterate over all items in the DataTransferItemList use functional programming
 				for (const item of Array.from(e.dataTransfer.items)) {
@@ -77,6 +97,8 @@
 					if (item.kind === 'file') {
 						const file = item.getAsFile();
 						if (file && file.type === 'application/json') {
+							console.log('Dropped file is a JSON file!');
+
 							// Read the JSON file with FileReader
 							const reader = new FileReader();
 							reader.onload = async function (event) {
@@ -97,54 +119,84 @@
 						} else {
 							console.error('Only JSON file types are supported.');
 						}
+
+						console.log(file);
 					} else {
 						// Handle the drag-and-drop data for folders or chats (same as before)
 						const dataTransfer = e.dataTransfer.getData('text/plain');
-						const data = JSON.parse(dataTransfer);
-						const { type, id, item } = data;
 
-						if (type === 'folder') {
-							open = true;
-							if (id === folderId) {
-								return;
-							}
-							// Move the folder
-							const res = await updateFolderParentIdById(localStorage.token, id, folderId).catch(
-								(error) => {
+						try {
+							const data = JSON.parse(dataTransfer);
+							console.log(data);
+
+							const { type, id, item } = data;
+
+							if (type === 'folder') {
+								open = true;
+								if (id === folderId) {
+									return;
+								}
+								// Move the folder
+								const res = await updateFolderParentIdById(localStorage.token, id, folderId).catch(
+									(error) => {
+										toast.error(`${error}`);
+										return null;
+									}
+								);
+
+								if (res) {
+									dispatch('update');
+								}
+							} else if (type === 'chat') {
+								open = true;
+
+								let chat = await getChatById(localStorage.token, id).catch((error) => {
+									return null;
+								});
+								if (!chat && item) {
+									chat = await importChats(localStorage.token, [
+										{
+											chat: item.chat,
+											meta: item?.meta ?? {},
+											pinned: false,
+											folder_id: null,
+											created_at: item?.created_at ?? null,
+											updated_at: item?.updated_at ?? null
+										}
+									]).catch((error) => {
+										toast.error(`${error}`);
+										return null;
+									});
+								}
+
+								// Move the chat
+								const res = await updateChatFolderIdById(
+									localStorage.token,
+									chat.id,
+									folderId
+								).catch((error) => {
 									toast.error(`${error}`);
 									return null;
+								});
+
+								onItemMove({
+									originFolderId: chat.folder_id,
+									targetFolderId: folderId,
+									e
+								});
+
+								if (res) {
+									dispatch('update');
 								}
-							);
-
-							if (res) {
-								dispatch('update');
 							}
-						} else if (type === 'chat') {
-							open = true;
-
-							let chat = await getChatById(localStorage.token, id).catch((error) => {
-								return null;
-							});
-							if (!chat && item) {
-								chat = await importChat(localStorage.token, item.chat, item?.meta ?? {});
-							}
-
-							// Move the chat
-							const res = await updateChatFolderIdById(localStorage.token, chat.id, folderId).catch(
-								(error) => {
-									toast.error(`${error}`);
-									return null;
-								}
-							);
-
-							if (res) {
-								dispatch('update');
-							}
+						} catch (error) {
+							console.log('Error parsing dataTransfer:', error);
 						}
 					}
 				}
 			}
 
+			setFolderItems();
 			draggedOver = false;
 		}
 	};
@@ -196,8 +248,13 @@
 		dragged = false;
 	};
 
-	onMount(() => {
+	onMount(async () => {
 		open = folders[folderId].is_expanded;
+		folderRegistry[folderId] = {
+			setFolderItems: () => {
+				setFolderItems();
+			}
+		};
 		if (folderElement) {
 			folderElement.addEventListener('dragover', onDragOver);
 			folderElement.addEventListener('drop', onDrop);
@@ -209,6 +266,12 @@
 			folderElement.addEventListener('drag', onDrag);
 			// Event listener for when dragging ends
 			folderElement.addEventListener('dragend', onDragEnd);
+		}
+
+		if (folders[folderId]?.new) {
+			delete folders[folderId].new;
+			await tick();
+			renameHandler();
 		}
 	});
 
@@ -227,25 +290,22 @@
 	let showDeleteConfirm = false;
 
 	const deleteHandler = async () => {
-		const res = await deleteFolderById(localStorage.token, folderId).catch((error) => {
-			toast.error(`${error}`);
-			return null;
-		});
+		const res = await deleteFolderById(localStorage.token, folderId, deleteFolderContents).catch(
+			(error) => {
+				toast.error(`${error}`);
+				return null;
+			}
+		);
 
 		if (res) {
 			toast.success($i18n.t('Folder deleted successfully'));
-			dispatch('update');
+			onDelete(folderId);
 		}
 	};
 
-	const nameUpdateHandler = async () => {
+	const updateHandler = async ({ name, meta, data }) => {
 		if (name === '') {
-			toast.error($i18n.t('Folder name cannot be empty'));
-			return;
-		}
-
-		if (name === folders[folderId].name) {
-			edit = false;
+			toast.error($i18n.t('Folder name cannot be empty.'));
 			return;
 		}
 
@@ -254,7 +314,11 @@
 		name = name.trim();
 		folders[folderId].name = name;
 
-		const res = await updateFolderNameById(localStorage.token, folderId, name).catch((error) => {
+		const res = await updateFolderById(localStorage.token, folderId, {
+			name,
+			...(meta ? { meta } : {}),
+			...(data ? { data } : {})
+		}).catch((error) => {
 			toast.error(`${error}`);
 
 			folders[folderId].name = currentName;
@@ -263,7 +327,23 @@
 
 		if (res) {
 			folders[folderId].name = name;
-			toast.success($i18n.t('Folder name updated successfully'));
+			if (data) {
+				folders[folderId].data = data;
+			}
+
+			// toast.success($i18n.t('Folder name updated successfully'));
+			toast.success($i18n.t('Folder updated successfully'));
+
+			if ($selectedFolder?.id === folderId) {
+				const folder = await getFolderById(localStorage.token, folderId).catch((error) => {
+					toast.error(`${error}`);
+					return null;
+				});
+
+				if (folder) {
+					await selectedFolder.set(folder);
+				}
+			}
 			dispatch('update');
 		}
 	};
@@ -279,27 +359,44 @@
 
 	let isExpandedUpdateTimeout;
 
-	const isExpandedUpdateDebounceHandler = (open) => {
+	const isExpandedUpdateDebounceHandler = () => {
 		clearTimeout(isExpandedUpdateTimeout);
 		isExpandedUpdateTimeout = setTimeout(() => {
 			isExpandedUpdateHandler();
 		}, 500);
 	};
 
-	$: isExpandedUpdateDebounceHandler(open);
+	let chats = null;
+	export const setFolderItems = async () => {
+		await tick();
+		if (open) {
+			chats = await getChatListByFolderId(localStorage.token, folderId).catch((error) => {
+				toast.error(`${error}`);
+				return [];
+			});
+		} else {
+			chats = null;
+		}
+	};
 
-	const editHandler = async () => {
+	$: if (open) {
+		setFolderItems();
+	}
+
+	const renameHandler = async () => {
+		console.log('Edit');
 		await tick();
 		name = folders[folderId].name;
 		edit = true;
 
 		await tick();
+		await tick();
 
-		// focus on the input
-		setTimeout(() => {
-			const input = document.getElementById(`folder-${folderId}-input`);
+		const input = document.getElementById(`folder-${folderId}-input`);
+		if (input) {
 			input.focus();
-		}, 100);
+			input.select();
+		}
 	};
 
 	const exportHandler = async () => {
@@ -326,14 +423,26 @@
 		deleteHandler();
 	}}
 >
-	<div class=" text-sm text-gray-700 dark:text-gray-300 flex-1 line-clamp-3">
-		{@html DOMPurify.sanitize(
-			$i18n.t('This will delete <strong>{{NAME}}</strong> and <strong>all its contents</strong>.', {
+	<div class=" text-sm text-gray-700 dark:text-gray-300 flex-1 line-clamp-3 mb-2">
+		<!-- {$i18n.t('This will delete <strong>{{NAME}}</strong> and <strong>all its contents</strong>.', {
 				NAME: folders[folderId].name
-			})
-		)}
+			})} -->
+
+		{$i18n.t(`Are you sure you want to delete "{{NAME}}"?`, {
+			NAME: folders[folderId].name
+		})}
+	</div>
+
+	<div class="flex items-center gap-1.5">
+		<input type="checkbox" bind:checked={deleteFolderContents} />
+
+		<div class="text-xs text-gray-500">
+			{$i18n.t('Delete all contents inside this folder')}
+		</div>
 	</div>
 </DeleteConfirmDialog>
+
+<FolderModal bind:show={showFolderModal} edit={true} {folderId} onSubmit={updateHandler} />
 
 {#if dragged && x && y}
 	<DragGhost {x} {y}>
@@ -351,7 +460,7 @@
 <div bind:this={folderElement} class="relative {className}" draggable="true">
 	{#if draggedOver}
 		<div
-			class="absolute top-0 left-0 w-full h-full rounded-sm bg-gray-100/50 dark:bg-gray-700/20 bg-opacity-50 dark:bg-opacity-10 z-50 pointer-events-none touch-none"
+			class="absolute top-0 left-0 w-full h-full rounded-xs bg-gray-100/50 dark:bg-gray-700/20 bg-opacity-50 dark:bg-opacity-10 z-50 pointer-events-none touch-none"
 		></div>
 	{/if}
 
@@ -359,37 +468,95 @@
 		bind:open
 		className="w-full"
 		buttonClassName="w-full"
-		hide={(folders[folderId]?.childrenIds ?? []).length === 0 &&
-			(folders[folderId].items?.chats ?? []).length === 0}
-		on:change={(e) => {
-			dispatch('open', e.detail);
+		onChange={(state) => {
+			dispatch('open', state);
 		}}
 	>
 		<!-- svelte-ignore a11y-no-static-element-interactions -->
-		<div class="w-full group relative">
-			<button
+		<div class="w-full group">
+			<div
 				id="folder-{folderId}-button"
-				class="relative w-full py-1.5 px-2 rounded-md flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-500 font-medium hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-				on:dblclick={() => {
-					editHandler();
+				class="relative w-full py-1 px-1.5 rounded-xl flex items-center gap-1.5 hover:bg-gray-100 dark:hover:bg-gray-900 transition {$selectedFolder?.id ===
+				folderId
+					? 'bg-gray-100 dark:bg-gray-900 selected'
+					: ''}"
+				on:dblclick={(e) => {
+					if (clickTimer) {
+						clearTimeout(clickTimer); // cancel the single-click action
+						clickTimer = null;
+					}
+					renameHandler();
+				}}
+				on:click={async (e) => {
+					(e) => e.stopPropagation();
+					if (clickTimer) {
+						clearTimeout(clickTimer);
+						clickTimer = null;
+					}
+
+					clickTimer = setTimeout(async () => {
+						const folder = await getFolderById(localStorage.token, folderId).catch((error) => {
+							toast.error(`${error}`);
+							return null;
+						});
+
+						if (folder) {
+							await selectedFolder.set(folder);
+						}
+
+						await goto('/');
+
+						if ($mobile) {
+							showSidebar.set(!$showSidebar);
+						}
+						clickTimer = null;
+					}, 100); // 100ms delay (typical double-click threshold)
+				}}
+				on:pointerup={(e) => {
+					e.stopPropagation();
 				}}
 			>
-				{#if open}
-					<ChevronDown className=" size-3" strokeWidth="2.5" />
-				{:else}
-					<ChevronRight className=" size-3" strokeWidth="2.5" />
-				{/if}
-
-				<h3
-					class="translate-y-[0.5px] flex-1 justify-start text-start line-clamp-1 text-gray-900 dark:text-gray-100"
+				<button
+					class="text-gray-500 dark:text-gray-500 transition-all p-1 hover:bg-gray-200 dark:hover:bg-gray-850 rounded-lg"
+					on:click={(e) => {
+						e.stopPropagation();
+						e.stopImmediatePropagation();
+						open = !open;
+						isExpandedUpdateDebounceHandler();
+					}}
 				>
+					{#if folders[folderId]?.meta?.icon}
+						<div class="flex group-hover:hidden transition-all">
+							<Emoji className="size-3.5" shortCode={folders[folderId].meta.icon} />
+						</div>
+
+						<div class="hidden group-hover:flex transition-all p-[1px]">
+							{#if open}
+								<ChevronDown className=" size-3" strokeWidth="2.5" />
+							{:else}
+								<ChevronRight className=" size-3" strokeWidth="2.5" />
+							{/if}
+						</div>
+					{:else}
+						<div class="p-[1px]">
+							{#if open}
+								<ChevronDown className=" size-3" strokeWidth="2.5" />
+							{:else}
+								<ChevronRight className=" size-3" strokeWidth="2.5" />
+							{/if}
+						</div>
+					{/if}
+				</button>
+
+				<div class="translate-y-[0.5px] flex-1 justify-start text-start line-clamp-1">
 					{#if edit}
 						<input
 							id="folder-{folderId}-input"
 							type="text"
 							bind:value={name}
 							on:blur={() => {
-								nameUpdateHandler();
+								console.log('Blur');
+								updateHandler({ name });
 								edit = false;
 							}}
 							on:click={(e) => {
@@ -402,49 +569,41 @@
 							}}
 							on:keydown={(e) => {
 								if (e.key === 'Enter') {
-									nameUpdateHandler();
+									updateHandler({ name });
 									edit = false;
 								}
 							}}
-							class="w-full h-full bg-transparent text-gray-500 dark:text-gray-500 outline-none"
+							class="w-full h-full bg-transparent outline-hidden"
 						/>
 					{:else}
 						{folders[folderId].name}
 					{/if}
-				</h3>
-			</button>
-			<div
-				class="absolute top-1/2 -translate-y-1/2 z-10 right-2 invisible group-hover:visible self-center flex items-center dark:text-gray-300"
-			>
-				<Tooltip content={$i18n.t('Folder Menu')}>
+				</div>
+
+				<button
+					class="absolute z-10 right-2 invisible group-hover:visible self-center flex items-center dark:text-gray-300"
+				>
 					<FolderMenu
-						buttonClass="p-0.5 dark:hover:bg-gray-850 rounded-lg touch-auto"
-						ariaLabel={$i18n.t('Folder Menu')}
-						{buttonID}
-						on:rename={() => {
-							editHandler();
+						onEdit={() => {
+							showFolderModal = true;
 						}}
-						on:delete={() => {
+						onDelete={() => {
 							showDeleteConfirm = true;
 						}}
-						on:export={() => {
+						onExport={() => {
 							exportHandler();
 						}}
-						on:pointerup={(e) => {
-							e.stopPropagation();
-						}}
-						on:click={(e) => {}}
 					>
-						<div>
+						<div class="p-1 dark:hover:bg-gray-850 rounded-lg touch-auto">
 							<EllipsisHorizontal className="size-4" strokeWidth="2.5" />
 						</div>
 					</FolderMenu>
-				</Tooltip>
+				</button>
 			</div>
 		</div>
 
 		<div slot="content" class="w-full">
-			{#if (folders[folderId]?.childrenIds ?? []).length > 0 || (folders[folderId].items?.chats ?? []).length > 0}
+			{#if (folders[folderId]?.childrenIds ?? []).length > 0 || (chats ?? []).length > 0}
 				<div
 					class="ml-3 pl-1 mt-[1px] flex flex-col overflow-y-auto scrollbar-hidden border-s border-gray-100 dark:border-gray-900"
 				>
@@ -460,9 +619,13 @@
 
 						{#each children as childFolder (`${folderId}-${childFolder.id}`)}
 							<svelte:self
+								bind:folderRegistry
 								{folders}
 								folderId={childFolder.id}
+								{shiftKey}
 								parentDragged={dragged}
+								{onItemMove}
+								{onDelete}
 								on:import={(e) => {
 									dispatch('import', e.detail);
 								}}
@@ -476,17 +639,22 @@
 						{/each}
 					{/if}
 
-					{#if folders[folderId].items?.chats}
-						{#each folders[folderId].items.chats as chat (chat.id)}
-							<ChatItem
-								id={chat.id}
-								title={chat.title}
-								on:change={(e) => {
-									dispatch('change', e.detail);
-								}}
-							/>
-						{/each}
-					{/if}
+					{#each chats ?? [] as chat (chat.id)}
+						<ChatItem
+							id={chat.id}
+							title={chat.title}
+							{shiftKey}
+							on:change={(e) => {
+								dispatch('change', e.detail);
+							}}
+						/>
+					{/each}
+				</div>
+			{/if}
+
+			{#if chats === null}
+				<div class="flex justify-center items-center p-2">
+					<Spinner className="size-4 text-gray-500" />
 				</div>
 			{/if}
 		</div>

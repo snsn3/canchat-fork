@@ -1,16 +1,19 @@
-import asyncio
 from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 
 from open_webui.models.prompts import (
     PromptForm,
     PromptUserResponse,
+    PromptAccessResponse,
     PromptModel,
     Prompts,
 )
 from open_webui.constants import ERROR_MESSAGES
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
-from open_webui.utils.auth import get_verified_user
+from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_access, has_permission
+from open_webui.config import BYPASS_ADMIN_ACCESS_CONTROL
+from open_webui.internal.db import get_session
+from sqlalchemy.orm import Session
 
 router = APIRouter()
 
@@ -20,112 +23,37 @@ router = APIRouter()
 
 
 @router.get("/", response_model=list[PromptModel])
-async def get_prompts(user=Depends(get_verified_user)):
-    """Get all prompts (original behavior) - now with access control and public prompts"""
-    if user.role == "admin":
-        prompts = await asyncio.to_thread(Prompts.get_prompts)
-    else:
-        # Non-admin users see public prompts + owned prompts + shared prompts
-        # Use optimized method with large limit for backward compatibility
-        prompts = await asyncio.to_thread(
-            Prompts.get_prompts_with_access_control,
-            user.id,
-            page=1,
-            limit=10000,
-            search=None,
-        )
-
-    return prompts
-
-
-@router.get("/list", response_model=list[PromptUserResponse])
-async def get_prompt_list(user=Depends(get_verified_user)):
-    """Get all prompts with user info (original behavior) - now with access control and public prompts"""
-    if user.role == "admin":
-        prompts = await asyncio.to_thread(Prompts.get_prompts)
-    else:
-        # Non-admin users see public prompts + owned prompts + shared prompts
-        # Use optimized method with large limit for backward compatibility
-        prompts = await asyncio.to_thread(
-            Prompts.get_prompts_with_access_control_and_users,
-            user.id,
-            page=1,
-            limit=10000,
-            search=None,
-        )
-
-    return prompts
-
-
-# NEW PAGINATED ENDPOINTS
-@router.get("/paginated", response_model=list[PromptModel])
-async def get_prompts_paginated(
-    user=Depends(get_verified_user),
-    page: int = Query(1, ge=1, description="Page number"),
-    limit: int = Query(20, ge=1, le=100, description="Items per page"),
-    search: Optional[str] = Query(None, description="Search query"),
+async def get_prompts(
+    user=Depends(get_verified_user), db: Session = Depends(get_session)
 ):
-    """Get paginated prompts with optional search"""
-    if user.role == "admin":
-        prompts = await asyncio.to_thread(
-            Prompts.get_prompts_paginated, page=page, limit=limit, search=search
-        )
+    if user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL:
+        prompts = Prompts.get_prompts(db=db)
     else:
-        # Non-admin users see public prompts + owned prompts + shared prompts
-        prompts = await asyncio.to_thread(
-            Prompts.get_prompts_with_access_control,
-            user.id,
-            page=page,
-            limit=limit,
-            search=search,
-        )
+        prompts = Prompts.get_prompts_by_user_id(user.id, "read", db=db)
 
     return prompts
 
 
-@router.get("/list/paginated", response_model=list[PromptUserResponse])
-async def get_prompt_list_paginated(
-    user=Depends(get_verified_user),
-    page: int = Query(1, ge=1, description="Page number"),
-    limit: int = Query(20, ge=1, le=100, description="Items per page"),
-    search: Optional[str] = Query(None, description="Search query"),
+@router.get("/list", response_model=list[PromptAccessResponse])
+async def get_prompt_list(
+    user=Depends(get_verified_user), db: Session = Depends(get_session)
 ):
-    """Get paginated prompt list with user info and optional search"""
-    if user.role == "admin":
-        prompts = await asyncio.to_thread(
-            Prompts.get_prompts_with_users_paginated,
-            page=page,
-            limit=limit,
-            search=search,
-        )
+    if user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL:
+        prompts = Prompts.get_prompts(db=db)
     else:
-        # Non-admin users see public prompts + owned prompts + shared prompts
-        prompts = await asyncio.to_thread(
-            Prompts.get_prompts_with_access_control_and_users,
-            user.id,
-            page=page,
-            limit=limit,
-            search=search,
+        prompts = Prompts.get_prompts_by_user_id(user.id, "read", db=db)
+
+    return [
+        PromptAccessResponse(
+            **prompt.model_dump(),
+            write_access=(
+                (user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL)
+                or user.id == prompt.user_id
+                or has_access(user.id, "write", prompt.access_control, db=db)
+            ),
         )
-
-    return prompts
-
-
-@router.get("/count")
-async def get_prompts_count(
-    user=Depends(get_verified_user),
-    search: Optional[str] = Query(None, description="Search query"),
-):
-    """Get total count of prompts with optional search filter"""
-    if user.role == "admin":
-        count = await asyncio.to_thread(Prompts.get_prompts_count, search=search)
-    else:
-        # Non-admin users see count of accessible prompts
-        count = await asyncio.to_thread(
-            Prompts.get_prompts_count_with_access_control, user.id, search=search
-        )
-
-    return {"count": count}
+        for prompt in prompts
+    ]
 
 
 ############################
@@ -135,26 +63,33 @@ async def get_prompts_count(
 
 @router.post("/create", response_model=Optional[PromptModel])
 async def create_new_prompt(
-    request: Request, form_data: PromptForm, user=Depends(get_verified_user)
+    request: Request,
+    form_data: PromptForm,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
 ):
-    if user.role != "admin" and not has_permission(
-        user.id, "workspace.prompts", request.app.state.config.USER_PERMISSIONS
+    if user.role != "admin" and not (
+        has_permission(
+            user.id,
+            "workspace.prompts",
+            request.app.state.config.USER_PERMISSIONS,
+            db=db,
+        )
+        or has_permission(
+            user.id,
+            "workspace.prompts_import",
+            request.app.state.config.USER_PERMISSIONS,
+            db=db,
+        )
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ERROR_MESSAGES.UNAUTHORIZED,
         )
 
-    # Non-admin users can only create private prompts
-    if user.role != "admin" and form_data.access_control is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only administrators can create public prompts",
-        )
-
-    prompt = await asyncio.to_thread(Prompts.get_prompt_by_command, form_data.command)
+    prompt = Prompts.get_prompt_by_command(form_data.command, db=db)
     if prompt is None:
-        prompt = await asyncio.to_thread(Prompts.insert_new_prompt, user.id, form_data)
+        prompt = Prompts.insert_new_prompt(user.id, form_data, db=db)
 
         if prompt:
             return prompt
@@ -173,17 +108,26 @@ async def create_new_prompt(
 ############################
 
 
-@router.get("/command/{command}", response_model=Optional[PromptModel])
-async def get_prompt_by_command(command: str, user=Depends(get_verified_user)):
-    prompt = await asyncio.to_thread(Prompts.get_prompt_by_command, f"/{command}")
+@router.get("/command/{command}", response_model=Optional[PromptAccessResponse])
+async def get_prompt_by_command(
+    command: str, user=Depends(get_verified_user), db: Session = Depends(get_session)
+):
+    prompt = Prompts.get_prompt_by_command(f"/{command}", db=db)
 
     if prompt:
         if (
             user.role == "admin"
             or prompt.user_id == user.id
-            or has_access(user.id, "read", prompt.access_control)
+            or has_access(user.id, "read", prompt.access_control, db=db)
         ):
-            return prompt
+            return PromptAccessResponse(
+                **prompt.model_dump(),
+                write_access=(
+                    (user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL)
+                    or user.id == prompt.user_id
+                    or has_access(user.id, "write", prompt.access_control, db=db)
+                ),
+            )
     else:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -201,41 +145,27 @@ async def update_prompt_by_command(
     command: str,
     form_data: PromptForm,
     user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
 ):
-    prompt = await asyncio.to_thread(Prompts.get_prompt_by_command, f"/{command}")
+    prompt = Prompts.get_prompt_by_command(f"/{command}", db=db)
     if not prompt:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    # Access control based on clarified rules:
-    # - Admins can edit any prompt
-    # - Non-admins can only edit their own private prompts (not public prompts)
-    if user.role != "admin":
-        # Non-admins can only edit their own prompts
-        if prompt.user_id != user.id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
-        # Non-admins cannot edit public prompts (even their own)
-        if prompt.access_control is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only administrators can edit public prompts",
-            )
-
-    # Non-admin users can only create/maintain private prompts
-    if user.role != "admin" and form_data.access_control is None:
+    # Is the user the original creator, in a group with write access, or an admin
+    if (
+        prompt.user_id != user.id
+        and not has_access(user.id, "write", prompt.access_control, db=db)
+        and user.role != "admin"
+    ):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only administrators can create or modify public prompts",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    prompt = await asyncio.to_thread(
-        Prompts.update_prompt_by_command, f"/{command}", form_data
-    )
+    prompt = Prompts.update_prompt_by_command(f"/{command}", form_data, db=db)
     if prompt:
         return prompt
     else:
@@ -251,30 +181,25 @@ async def update_prompt_by_command(
 
 
 @router.delete("/command/{command}/delete", response_model=bool)
-async def delete_prompt_by_command(command: str, user=Depends(get_verified_user)):
-    prompt = await asyncio.to_thread(Prompts.get_prompt_by_command, f"/{command}")
+async def delete_prompt_by_command(
+    command: str, user=Depends(get_verified_user), db: Session = Depends(get_session)
+):
+    prompt = Prompts.get_prompt_by_command(f"/{command}", db=db)
     if not prompt:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    # Access control based on clarified rules:
-    # - Admins can delete any prompt
-    # - Non-admins can only delete their own private prompts (not public prompts)
-    if user.role != "admin":
-        # Non-admins can only delete their own prompts
-        if prompt.user_id != user.id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
-        # Non-admins cannot delete public prompts (even their own)
-        if prompt.access_control is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only administrators can delete public prompts",
-            )
+    if (
+        prompt.user_id != user.id
+        and not has_access(user.id, "write", prompt.access_control, db=db)
+        and user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
 
-    result = await asyncio.to_thread(Prompts.delete_prompt_by_command, f"/{command}")
+    result = Prompts.delete_prompt_by_command(f"/{command}", db=db)
     return result

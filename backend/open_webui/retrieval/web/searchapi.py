@@ -4,10 +4,8 @@ from urllib.parse import urlencode
 
 import requests
 from open_webui.retrieval.web.main import SearchResult, get_filtered_results
-from open_webui.env import SRC_LOG_LEVELS
 
 log = logging.getLogger(__name__)
-log.setLevel(SRC_LOG_LEVELS["RAG"])
 
 
 def search_searchapi(
@@ -42,7 +40,9 @@ def search_searchapi(
         results = get_filtered_results(results, filter_list)
     return [
         SearchResult(
-            link=result["link"], title=result["title"], snippet=result["snippet"]
+            link=result["link"],
+            title=result.get("title"),
+            snippet=result.get("snippet"),
         )
         for result in results[:count]
     ]

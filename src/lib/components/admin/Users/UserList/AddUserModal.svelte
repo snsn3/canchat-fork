@@ -6,7 +6,11 @@
 
 	import { WEBUI_BASE_URL } from '$lib/constants';
 
+	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Modal from '$lib/components/common/Modal.svelte';
+	import { generateInitialsImage } from '$lib/utils';
+	import XMark from '$lib/components/icons/XMark.svelte';
+	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
 
 	const i18n = getContext('i18n');
 	const dispatch = createEventDispatcher();
@@ -47,7 +51,8 @@
 				_user.name,
 				_user.email,
 				_user.password,
-				_user.role
+				_user.role,
+				generateInitialsImage(_user.name)
 			).catch((error) => {
 				toast.error(`${error}`);
 			});
@@ -71,19 +76,20 @@
 
 					for (const [idx, row] of rows.entries()) {
 						const columns = row.split(',').map((col) => col.trim());
+						console.debug(idx, columns);
+
 						if (idx > 0) {
 							if (
 								columns.length === 4 &&
-								['admin', 'user', 'pending', 'analyst', 'global_analyst'].includes(
-									columns[3].toLowerCase()
-								)
+								['admin', 'user', 'pending'].includes(columns[3].toLowerCase())
 							) {
 								const res = await addUser(
 									localStorage.token,
 									columns[0],
 									columns[1],
 									columns[2],
-									columns[3].toLowerCase()
+									columns[3].toLowerCase(),
+									generateInitialsImage(columns[0])
 								).catch((error) => {
 									toast.error(`Row ${idx + 1}: ${error}`);
 									return null;
@@ -98,7 +104,9 @@
 						}
 					}
 
-					toast.success(`Successfully imported ${userCount} users.`);
+					toast.success(
+						$i18n.t('Successfully imported {{userCount}} users.', { userCount: userCount })
+					);
 					inputFiles = null;
 					const uploadInputElement = document.getElementById('upload-user-csv-input');
 
@@ -109,7 +117,7 @@
 					stopLoading();
 				};
 
-				reader.readAsText(file);
+				reader.readAsText(file, 'utf-8');
 			} else {
 				toast.error($i18n.t('File not found.'));
 			}
@@ -119,7 +127,7 @@
 	};
 </script>
 
-<Modal size="sm" bind:show returnfocusSelector="#add-user">
+<Modal size="sm" bind:show>
 	<div>
 		<div class=" flex justify-between dark:text-gray-300 px-5 pt-4 pb-2">
 			<div class=" text-lg font-medium self-center">{$i18n.t('Add User')}</div>
@@ -129,16 +137,7 @@
 					show = false;
 				}}
 			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="w-5 h-5"
-				>
-					<path
-						d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"
-					/>
-				</svg>
+				<XMark className={'size-5'} />
 			</button>
 		</div>
 
@@ -154,7 +153,7 @@
 						class="flex -mt-2 mb-1.5 gap-1 scrollbar-none overflow-x-auto w-fit text-center text-sm font-medium rounded-full bg-transparent dark:text-gray-200"
 					>
 						<button
-							class="min-w-fit rounded-full p-1.5 {tab === ''
+							class="min-w-fit p-1.5 {tab === ''
 								? ''
 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
 							type="button"
@@ -164,7 +163,7 @@
 						>
 
 						<button
-							class="min-w-fit rounded-full p-1.5 {tab === 'import'
+							class="min-w-fit p-1.5 {tab === 'import'
 								? ''
 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
 							type="button"
@@ -181,15 +180,13 @@
 
 								<div class="flex-1">
 									<select
-										class="w-full capitalize rounded-lg text-sm bg-transparent dark:disabled:text-gray-500 outline-none"
+										class="dark:bg-gray-900 w-full capitalize rounded-lg text-sm bg-transparent dark:disabled:text-gray-500 outline-hidden"
 										bind:value={_user.role}
 										placeholder={$i18n.t('Enter Your Role')}
 										required
 									>
 										<option value="pending"> {$i18n.t('pending')} </option>
 										<option value="user"> {$i18n.t('user')} </option>
-										<option value="analyst"> {$i18n.t('analyst')} </option>
-										<option value="global_analyst"> {$i18n.t('global analyst')} </option>
 										<option value="admin"> {$i18n.t('admin')} </option>
 									</select>
 								</div>
@@ -200,7 +197,7 @@
 
 								<div class="flex-1">
 									<input
-										class="w-full text-sm bg-transparent disabled:text-gray-500 dark:disabled:text-gray-500 outline-none"
+										class="w-full text-sm bg-transparent disabled:text-gray-500 dark:disabled:text-gray-500 outline-hidden"
 										type="text"
 										bind:value={_user.name}
 										placeholder={$i18n.t('Enter Your Full Name')}
@@ -210,14 +207,14 @@
 								</div>
 							</div>
 
-							<hr class=" border-gray-50 dark:border-gray-850 my-2.5 w-full" />
+							<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2.5 w-full" />
 
 							<div class="flex flex-col w-full">
 								<div class=" mb-1 text-xs text-gray-500">{$i18n.t('Email')}</div>
 
 								<div class="flex-1">
 									<input
-										class="w-full text-sm bg-transparent disabled:text-gray-500 dark:disabled:text-gray-500 outline-none"
+										class="w-full text-sm bg-transparent disabled:text-gray-500 dark:disabled:text-gray-500 outline-hidden"
 										type="email"
 										bind:value={_user.email}
 										placeholder={$i18n.t('Enter Your Email')}
@@ -230,12 +227,13 @@
 								<div class=" mb-1 text-xs text-gray-500">{$i18n.t('Password')}</div>
 
 								<div class="flex-1">
-									<input
-										class="w-full text-sm bg-transparent disabled:text-gray-500 dark:disabled:text-gray-500 outline-none"
+									<SensitiveInput
+										class="w-full text-sm bg-transparent disabled:text-gray-500 dark:disabled:text-gray-500 outline-hidden"
 										type="password"
 										bind:value={_user.password}
 										placeholder={$i18n.t('Enter Your Password')}
 										autocomplete="off"
+										required
 									/>
 								</div>
 							</div>
@@ -251,7 +249,7 @@
 									/>
 
 									<button
-										class="w-full text-sm font-medium py-3 bg-transparent hover:bg-gray-100 border border-dashed dark:border-gray-800 dark:hover:bg-gray-850 text-center rounded-xl"
+										class="w-full text-sm font-medium py-3 bg-transparent hover:bg-gray-100 border border-dashed dark:border-gray-850 dark:hover:bg-gray-850 text-center rounded-xl"
 										type="button"
 										on:click={() => {
 											document.getElementById('upload-user-csv-input')?.click();
@@ -292,29 +290,7 @@
 
 							{#if loading}
 								<div class="ml-2 self-center">
-									<svg
-										class=" w-4 h-4"
-										viewBox="0 0 24 24"
-										fill="currentColor"
-										xmlns="http://www.w3.org/2000/svg"
-										><style>
-											.spinner_ajPY {
-												transform-origin: center;
-												animation: spinner_AtaB 0.75s infinite linear;
-											}
-											@keyframes spinner_AtaB {
-												100% {
-													transform: rotate(360deg);
-												}
-											}
-										</style><path
-											d="M12,1A11,11,0,1,0,23,12,11,11,0,0,0,12,1Zm0,19a8,8,0,1,1,8-8A8,8,0,0,1,12,20Z"
-											opacity=".25"
-										/><path
-											d="M10.14,1.16a11,11,0,0,0-9,8.92A1.59,1.59,0,0,0,2.46,12,1.52,1.52,0,0,0,4.11,10.7a8,8,0,0,1,6.66-6.61A1.42,1.42,0,0,0,12,2.69h0A1.57,1.57,0,0,0,10.14,1.16Z"
-											class="spinner_ajPY"
-										/></svg
-									>
+									<Spinner />
 								</div>
 							{/if}
 						</button>

@@ -1,5 +1,7 @@
 import adapter from '@sveltejs/adapter-static';
+import * as child_process from 'node:child_process';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+import fs from 'node:fs';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
@@ -14,15 +16,35 @@ const config = {
 			pages: 'build',
 			assets: 'build',
 			fallback: 'index.html'
-		})
+		}),
+		// poll for new version name every 60 seconds (to trigger reload mechanic in +layout.svelte)
+		version: {
+			name: (() => {
+				try {
+					return child_process.execSync('git rev-parse HEAD').toString().trim();
+				} catch {
+					// if git is not available, fallback to package.json version
+					// or current timestamp
+					try {
+						return (
+							JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+								?.version || Date.now().toString()
+						);
+					} catch {
+						return Date.now().toString();
+					}
+				}
+			})(),
+			pollInterval: 60000
+		}
 	},
 	vitePlugin: {
-		inspector: {
-			toggleKeyCombo: 'meta-shift', // Key combination to open the inspector
-			holdMode: false, // Enable or disable hold mode
-			showToggleButton: 'never', // Show toggle button ('always', 'active', 'never')
-			toggleButtonPos: 'bottom-right' // Position of the toggle button
-		}
+		// inspector: {
+		// 	toggleKeyCombo: 'meta-shift', // Key combination to open the inspector
+		// 	holdMode: false, // Enable or disable hold mode
+		// 	showToggleButton: 'always', // Show toggle button ('always', 'active', 'never')
+		// 	toggleButtonPos: 'bottom-right' // Position of the toggle button
+		// }
 	},
 	onwarn: (warning, handler) => {
 		const { code } = warning;

@@ -1,14 +1,15 @@
 import time
 from typing import Optional
 
-from open_webui.internal.db import get_db
-from open_webui.models.base import Base
+from sqlalchemy.orm import Session
+from open_webui.internal.db import Base, JSONField, get_db, get_db_context
+from open_webui.models.groups import Groups
 from open_webui.models.users import Users, UserResponse
-from open_webui.utils.access_control import has_access
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import BigInteger, Column, String, Text, JSON, or_, cast
+from sqlalchemy import BigInteger, Column, String, Text, JSON
 
+from open_webui.utils.access_control import has_access
 
 ####################
 # Prompts DB Schema
@@ -62,6 +63,10 @@ class PromptUserResponse(PromptModel):
     user: Optional[UserResponse] = None
 
 
+class PromptAccessResponse(PromptUserResponse):
+    write_access: Optional[bool] = False
+
+
 class PromptForm(BaseModel):
     command: str
     title: str
@@ -71,7 +76,7 @@ class PromptForm(BaseModel):
 
 class PromptsTable:
     def insert_new_prompt(
-        self, user_id: str, form_data: PromptForm
+        self, user_id: str, form_data: PromptForm, db: Optional[Session] = None
     ) -> Optional[PromptModel]:
         prompt = PromptModel(
             **{
@@ -82,7 +87,7 @@ class PromptsTable:
         )
 
         try:
-            with get_db() as db:
+            with get_db_context(db) as db:
                 result = Prompt(**prompt.model_dump())
                 db.add(result)
                 db.commit()
@@ -94,262 +99,59 @@ class PromptsTable:
         except Exception:
             return None
 
-    def get_prompt_by_command(self, command: str) -> Optional[PromptModel]:
+    def get_prompt_by_command(
+        self, command: str, db: Optional[Session] = None
+    ) -> Optional[PromptModel]:
         try:
-            with get_db() as db:
+            with get_db_context(db) as db:
                 prompt = db.query(Prompt).filter_by(command=command).first()
                 return PromptModel.model_validate(prompt)
         except Exception:
             return None
 
-    def get_prompts(self) -> list[PromptUserResponse]:
-        with get_db() as db:
-            # Import User model to do the join
-            from open_webui.models.users import User
+    def get_prompts(self, db: Optional[Session] = None) -> list[PromptUserResponse]:
+        with get_db_context(db) as db:
+            all_prompts = db.query(Prompt).order_by(Prompt.timestamp.desc()).all()
 
-            # Single query with JOIN to avoid N+1 problem and nested connections
-            results = (
-                db.query(Prompt, User)
-                .join(
-                    User, Prompt.user_id == User.id, isouter=True
-                )  # LEFT JOIN in case user is deleted
-                .order_by(Prompt.timestamp.desc())
-                .all()
-            )
+            user_ids = list(set(prompt.user_id for prompt in all_prompts))
+
+            users = Users.get_users_by_user_ids(user_ids, db=db) if user_ids else []
+            users_dict = {user.id: user for user in users}
 
             prompts = []
-            for prompt, user in results:
-                user_data = None
-                if user:
-                    from open_webui.models.users import UserModel
-
-                    user_data = UserModel.model_validate(user).model_dump()
-
+            for prompt in all_prompts:
+                user = users_dict.get(prompt.user_id)
                 prompts.append(
                     PromptUserResponse.model_validate(
                         {
                             **PromptModel.model_validate(prompt).model_dump(),
-                            "user": user_data,
+                            "user": user.model_dump() if user else None,
                         }
                     )
                 )
 
             return prompts
 
-    def get_prompts_paginated(
-        self, page: int = 1, limit: int = 20, search: str = None
-    ) -> list[PromptModel]:
-        """Get paginated prompts with optional search"""
-        with get_db() as db:
-            query = db.query(Prompt)
-
-            # Apply search filter if provided
-            if search and search.strip():
-                search_term = f"%{search.strip().lower()}%"
-                query = query.filter(
-                    Prompt.command.ilike(search_term)
-                    | Prompt.title.ilike(search_term)
-                    | Prompt.content.ilike(search_term)
-                )
-
-            # Apply pagination
-            offset = (page - 1) * limit
-            prompts = (
-                query.order_by(Prompt.timestamp.desc())
-                .offset(offset)
-                .limit(limit)
-                .all()
-            )
-
-            return [PromptModel.model_validate(prompt) for prompt in prompts]
-
-    def get_prompts_with_users_paginated(
-        self, page: int = 1, limit: int = 20, search: str = None
+    def get_prompts_by_user_id(
+        self, user_id: str, permission: str = "write", db: Optional[Session] = None
     ) -> list[PromptUserResponse]:
-        """Get paginated prompts with user info and optional search"""
-        with get_db() as db:
-            # Import User model for the join
-            from open_webui.models.users import User
+        prompts = self.get_prompts(db=db)
+        user_group_ids = {
+            group.id for group in Groups.get_groups_by_member_id(user_id, db=db)
+        }
 
-            # Start with joined query to avoid N+1 problem
-            query = db.query(Prompt, User).join(
-                User, Prompt.user_id == User.id, isouter=True
-            )
-
-            # Apply search filter if provided
-            if search and search.strip():
-                search_term = f"%{search.strip().lower()}%"
-                query = query.filter(
-                    Prompt.command.ilike(search_term)
-                    | Prompt.title.ilike(search_term)
-                    | Prompt.content.ilike(search_term)
-                )
-
-            # Apply pagination
-            offset = (page - 1) * limit
-            results = (
-                query.order_by(Prompt.timestamp.desc())
-                .offset(offset)
-                .limit(limit)
-                .all()
-            )
-
-            prompts = []
-            for prompt, user in results:
-                user_data = None
-                if user:
-                    from open_webui.models.users import UserModel
-
-                    user_data = UserModel.model_validate(user).model_dump()
-
-                prompts.append(
-                    PromptUserResponse.model_validate(
-                        {
-                            **PromptModel.model_validate(prompt).model_dump(),
-                            "user": user_data,
-                        }
-                    )
-                )
-
-            return prompts
-
-    def get_prompts_count(self, search: str = None) -> int:
-        """Get total count of prompts with optional search filter"""
-        with get_db() as db:
-            query = db.query(Prompt)
-
-            # Apply search filter if provided
-            if search and search.strip():
-                search_term = f"%{search.strip().lower()}%"
-                query = query.filter(
-                    Prompt.command.ilike(search_term)
-                    | Prompt.title.ilike(search_term)
-                    | Prompt.content.ilike(search_term)
-                )
-
-            return query.count()
-
-    def get_prompts_by_user_id_paginated(
-        self,
-        user_id: str,
-        page: int = 1,
-        limit: int = 20,
-        search: str = None,
-    ) -> list[PromptModel]:
-        """Get paginated prompts by user - users only see their own prompts"""
-        with get_db() as db:
-            query = db.query(Prompt)
-
-            # Users only see their own prompts
-            query = query.filter(Prompt.user_id == user_id)
-
-            # Apply search filter if provided
-            if search and search.strip():
-                search_term = f"%{search.strip().lower()}%"
-                query = query.filter(
-                    Prompt.command.ilike(search_term)
-                    | Prompt.title.ilike(search_term)
-                    | Prompt.content.ilike(search_term)
-                )
-
-            # Apply pagination
-            offset = (page - 1) * limit
-            prompts = (
-                query.order_by(Prompt.timestamp.desc())
-                .offset(offset)
-                .limit(limit)
-                .all()
-            )
-
-            return [PromptModel.model_validate(prompt) for prompt in prompts]
-
-            return result
-
-    def get_prompts_by_user_id_with_users_paginated(
-        self,
-        user_id: str,
-        page: int = 1,
-        limit: int = 20,
-        search: str = None,
-    ) -> list[PromptUserResponse]:
-        """Get paginated prompts by user with user info - users only see their own prompts"""
-        # Use JOIN query to avoid N+1 problem
-        with get_db() as db:
-            from open_webui.models.users import User, UserModel
-
-            # Single query with JOIN
-            query = db.query(Prompt, User).join(
-                User, Prompt.user_id == User.id, isouter=True
-            )
-
-            # Filter by user ID
-            query = query.filter(Prompt.user_id == user_id)
-
-            # Apply search filter if provided
-            if search and search.strip():
-                search_term = f"%{search.strip().lower()}%"
-                query = query.filter(
-                    Prompt.command.ilike(search_term)
-                    | Prompt.title.ilike(search_term)
-                    | Prompt.content.ilike(search_term)
-                )
-
-            # Apply pagination
-            offset = (page - 1) * limit
-            results = (
-                query.order_by(Prompt.timestamp.desc())
-                .offset(offset)
-                .limit(limit)
-                .all()
-            )
-
-            result = []
-            for prompt, user in results:
-                user_data = None
-                if user:
-                    user_data = UserModel.model_validate(user).model_dump()
-
-                result.append(
-                    PromptUserResponse.model_validate(
-                        {
-                            **PromptModel.model_validate(prompt).model_dump(),
-                            "user": user_data,
-                        }
-                    )
-                )
-
-        return result
-
-    def get_prompts_count_by_user_id(self, user_id: str, search: str = None) -> int:
-        """Get count of prompts for user - users only see their own prompts"""
-        with get_db() as db:
-            query = db.query(Prompt)
-
-            # Users only see their own prompts
-            query = query.filter(Prompt.user_id == user_id)
-
-            # Apply search filter if provided
-            if search and search.strip():
-                search_term = f"%{search.strip().lower()}%"
-                query = query.filter(
-                    Prompt.command.ilike(search_term)
-                    | Prompt.title.ilike(search_term)
-                    | Prompt.content.ilike(search_term)
-                )
-
-            return query.count()
-
-    def get_prompts_by_user_id(self, user_id: str) -> list[PromptUserResponse]:
-        """Get prompts for user - users only see their own prompts"""
-        prompts = self.get_prompts()
-
-        return [prompt for prompt in prompts if prompt.user_id == user_id]
+        return [
+            prompt
+            for prompt in prompts
+            if prompt.user_id == user_id
+            or has_access(user_id, permission, prompt.access_control, user_group_ids)
+        ]
 
     def update_prompt_by_command(
-        self, command: str, form_data: PromptForm
+        self, command: str, form_data: PromptForm, db: Optional[Session] = None
     ) -> Optional[PromptModel]:
         try:
-            with get_db() as db:
+            with get_db_context(db) as db:
                 prompt = db.query(Prompt).filter_by(command=command).first()
                 prompt.title = form_data.title
                 prompt.content = form_data.content
@@ -360,149 +162,17 @@ class PromptsTable:
         except Exception:
             return None
 
-    def delete_prompt_by_command(self, command: str) -> bool:
+    def delete_prompt_by_command(
+        self, command: str, db: Optional[Session] = None
+    ) -> bool:
         try:
-            with get_db() as db:
+            with get_db_context(db) as db:
                 db.query(Prompt).filter_by(command=command).delete()
                 db.commit()
 
                 return True
         except Exception:
             return False
-
-    def get_prompts_with_access_control(
-        self, user_id: str, page: int = 1, limit: int = 20, search: str = None
-    ) -> list[PromptModel]:
-        """Get paginated prompts that the user has access to (public + owned + shared)
-
-        Performance optimization: This method filters at the database level first,
-        which is much more efficient than loading all prompts and filtering in Python.
-        It uses SQL OR conditions to filter for public prompts and user's own prompts,
-        then only checks access control for the remaining subset.
-        """
-        with get_db() as db:
-            # Database-agnostic condition using SQLAlchemy cast for PostgreSQL compatibility
-            public_prompt_condition = or_(
-                Prompt.access_control.is_(None),
-                cast(Prompt.access_control, Text) == "null",
-            )
-
-            # Build base query that efficiently filters at database level
-            query = db.query(Prompt).filter(
-                or_(
-                    # Public prompts (database-agnostic condition)
-                    public_prompt_condition,
-                    # User's own prompts
-                    Prompt.user_id == user_id,
-                    # Note: We still need to check shared prompts manually since
-                    # access_control JSON structure requires application-level logic
-                )
-            )
-
-            # Apply search filter if provided
-            if search and search.strip():
-                search_term = f"%{search.strip().lower()}%"
-                query = query.filter(
-                    Prompt.command.ilike(search_term)
-                    | Prompt.title.ilike(search_term)
-                    | Prompt.content.ilike(search_term)
-                )
-
-            # Apply pagination and ordering at database level
-            offset = (page - 1) * limit
-            prompts = (
-                query.order_by(Prompt.timestamp.desc())
-                .offset(offset)
-                .limit(limit)
-                .all()
-            )
-
-            # For the small result set, check shared prompts with has_access
-            accessible_prompts = []
-            for prompt in prompts:
-                # Public prompts (access_control is None) are accessible to everyone
-                if prompt.access_control is None:
-                    accessible_prompts.append(prompt)
-                # User's own prompts are always accessible
-                elif prompt.user_id == user_id:
-                    accessible_prompts.append(prompt)
-                # Check if user has explicit read access to shared prompts
-                elif has_access(user_id, "read", prompt.access_control):
-                    accessible_prompts.append(prompt)
-
-            return [PromptModel.model_validate(prompt) for prompt in accessible_prompts]
-
-    def get_prompts_with_access_control_and_users(
-        self, user_id: str, page: int = 1, limit: int = 20, search: str = None
-    ) -> list[PromptUserResponse]:
-        """Get paginated prompts with user info that the user has access to"""
-        # Get accessible prompts first
-        prompts = self.get_prompts_with_access_control(user_id, page, limit, search)
-
-        # Add user info
-        prompts_with_users = []
-        for prompt in prompts:
-            user = Users.get_user_by_id(prompt.user_id)
-            prompts_with_users.append(
-                PromptUserResponse.model_validate(
-                    {
-                        **prompt.model_dump(),
-                        "user": user.model_dump() if user else None,
-                    }
-                )
-            )
-
-        return prompts_with_users
-
-    def get_prompts_count_with_access_control(
-        self, user_id: str, search: str = None
-    ) -> int:
-        """Get count of prompts the user has access to"""
-        with get_db() as db:
-            # Database-agnostic condition using SQLAlchemy cast for PostgreSQL compatibility
-            public_prompt_condition = or_(
-                Prompt.access_control.is_(None),
-                cast(Prompt.access_control, Text) == "null",
-            )
-
-            # Build efficient query that filters at database level
-            query = db.query(Prompt).filter(
-                or_(
-                    # Public prompts (database-agnostic condition)
-                    public_prompt_condition,
-                    # User's own prompts
-                    Prompt.user_id == user_id,
-                    # Note: We still need to check shared prompts manually since
-                    # access_control JSON structure requires application-level logic
-                )
-            )
-
-            # Apply search filter if provided
-            if search and search.strip():
-                search_term = f"%{search.strip().lower()}%"
-                query = query.filter(
-                    Prompt.command.ilike(search_term)
-                    | Prompt.title.ilike(search_term)
-                    | Prompt.content.ilike(search_term)
-                )
-
-            # Get the filtered prompts (much smaller set now)
-            prompts = query.all()
-
-            # For the small result set, check shared prompts with has_access
-            accessible_count = 0
-            for prompt in prompts:
-                # Public prompts (access_control is None) are accessible to everyone
-                if prompt.access_control is None:
-                    accessible_count += 1
-                # User's own prompts are always accessible
-                elif prompt.user_id == user_id:
-                    accessible_count += 1
-                # Check if user has explicit read access to shared prompts
-                elif has_access(user_id, "read", prompt.access_control):
-                    accessible_count += 1
-
-            return accessible_count
 
 
 Prompts = PromptsTable()

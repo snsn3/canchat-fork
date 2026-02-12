@@ -1,13 +1,19 @@
 import os
+import logging
 import torch
 import numpy as np
 from colbert.infra import ColBERTConfig
 from colbert.modeling.checkpoint import Checkpoint
 
 
-class ColBERT:
+from open_webui.retrieval.models.base_reranker import BaseReranker
+
+log = logging.getLogger(__name__)
+
+
+class ColBERT(BaseReranker):
     def __init__(self, name, **kwargs) -> None:
-        print("ColBERT: Loading model", name)
+        log.info("ColBERT: Loading model", name)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         DOCKER = kwargs.get("env") == "docker"
@@ -30,6 +36,7 @@ class ColBERT:
         pass
 
     def calculate_similarity_scores(self, query_embeddings, document_embeddings):
+
         query_embeddings = query_embeddings.to(self.device)
         document_embeddings = document_embeddings.to(self.device)
 
@@ -62,6 +69,7 @@ class ColBERT:
         return normalized_scores.detach().cpu().numpy().astype(np.float32)
 
     def predict(self, sentences):
+
         query = sentences[0][0]
         docs = [i[1] for i in sentences]
 

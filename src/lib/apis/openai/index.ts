@@ -16,7 +16,7 @@ export const getOpenAIConfig = async (token: string = '') => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			if ('detail' in err) {
 				error = err.detail;
 			} else {
@@ -58,7 +58,7 @@ export const updateOpenAIConfig = async (token: string = '', config: OpenAIConfi
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			if ('detail' in err) {
 				error = err.detail;
 			} else {
@@ -90,7 +90,7 @@ export const getOpenAIUrls = async (token: string = '') => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			if ('detail' in err) {
 				error = err.detail;
 			} else {
@@ -103,7 +103,7 @@ export const getOpenAIUrls = async (token: string = '') => {
 		throw error;
 	}
 
-	return res.OPENAI_API_BASE_URLS;
+	return res?.OPENAI_API_BASE_URLS ?? [];
 };
 
 export const updateOpenAIUrls = async (token: string = '', urls: string[]) => {
@@ -125,7 +125,7 @@ export const updateOpenAIUrls = async (token: string = '', urls: string[]) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			if ('detail' in err) {
 				error = err.detail;
 			} else {
@@ -157,7 +157,7 @@ export const getOpenAIKeys = async (token: string = '') => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			if ('detail' in err) {
 				error = err.detail;
 			} else {
@@ -170,7 +170,7 @@ export const getOpenAIKeys = async (token: string = '') => {
 		throw error;
 	}
 
-	return res.OPENAI_API_KEYS;
+	return res?.OPENAI_API_KEYS ?? [];
 };
 
 export const updateOpenAIKeys = async (token: string = '', keys: string[]) => {
@@ -192,7 +192,7 @@ export const updateOpenAIKeys = async (token: string = '', keys: string[]) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			if ('detail' in err) {
 				error = err.detail;
 			} else {
@@ -206,6 +206,33 @@ export const updateOpenAIKeys = async (token: string = '', keys: string[]) => {
 	}
 
 	return res.OPENAI_API_KEYS;
+};
+
+export const getOpenAIModelsDirect = async (url: string, key: string) => {
+	let error = null;
+
+	const res = await fetch(`${url}/models`, {
+		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(key && { authorization: `Bearer ${key}` })
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = `OpenAI: ${err?.error?.message ?? 'Network Problem'}`;
+			return [];
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
 };
 
 export const getOpenAIModels = async (token: string, urlIdx?: number) => {
@@ -240,34 +267,64 @@ export const getOpenAIModels = async (token: string, urlIdx?: number) => {
 
 export const verifyOpenAIConnection = async (
 	token: string = '',
-	url: string = 'https://api.openai.com/v1',
-	key: string = ''
+	connection: dict = {},
+	direct: boolean = false
 ) => {
+	const { url, key, config } = connection;
+	if (!url) {
+		throw 'OpenAI: URL is required';
+	}
+
 	let error = null;
+	let res = null;
 
-	const res = await fetch(`${OPENAI_API_BASE_URL}/verify`, {
-		method: 'POST',
-		headers: {
-			Accept: 'application/json',
-			Authorization: `Bearer ${token}`,
-			'Content-Type': 'application/json'
-		},
-		body: JSON.stringify({
-			url,
-			key
+	if (direct) {
+		res = await fetch(`${url}/models`, {
+			method: 'GET',
+			headers: {
+				Accept: 'application/json',
+				Authorization: `Bearer ${key}`,
+				'Content-Type': 'application/json'
+			}
 		})
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.catch((err) => {
-			error = `OpenAI: ${err?.error?.message ?? 'Network Problem'}`;
-			return [];
-		});
+			.then(async (res) => {
+				if (!res.ok) throw await res.json();
+				return res.json();
+			})
+			.catch((err) => {
+				error = `OpenAI: ${err?.error?.message ?? 'Network Problem'}`;
+				return [];
+			});
 
-	if (error) {
-		throw error;
+		if (error) {
+			throw error;
+		}
+	} else {
+		res = await fetch(`${OPENAI_API_BASE_URL}/verify`, {
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				Authorization: `Bearer ${token}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				url,
+				key,
+				config
+			})
+		})
+			.then(async (res) => {
+				if (!res.ok) throw await res.json();
+				return res.json();
+			})
+			.catch((err) => {
+				error = `OpenAI: ${err?.error?.message ?? 'Network Problem'}`;
+				return [];
+			});
+
+		if (error) {
+			throw error;
+		}
 	}
 
 	return res;
@@ -290,7 +347,7 @@ export const chatCompletion = async (
 		},
 		body: JSON.stringify(body)
 	}).catch((err) => {
-		console.log(err);
+		console.error(err);
 		error = err;
 		return null;
 	});
@@ -315,6 +372,7 @@ export const generateOpenAIChatCompletion = async (
 			Authorization: `Bearer ${token}`,
 			'Content-Type': 'application/json'
 		},
+		credentials: 'include',
 		body: JSON.stringify(body)
 	})
 		.then(async (res) => {
@@ -322,7 +380,7 @@ export const generateOpenAIChatCompletion = async (
 			return res.json();
 		})
 		.catch((err) => {
-			error = `${err?.detail ?? 'Network Problem'}`;
+			error = err?.detail ?? err;
 			return null;
 		});
 
@@ -353,7 +411,7 @@ export const synthesizeOpenAISpeech = async (
 			voice: speaker
 		})
 	}).catch((err) => {
-		console.log(err);
+		console.error(err);
 		error = err;
 		return null;
 	});

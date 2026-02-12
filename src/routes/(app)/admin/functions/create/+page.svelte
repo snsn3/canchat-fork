@@ -3,7 +3,7 @@
 	import { onMount, getContext } from 'svelte';
 	import { goto } from '$app/navigation';
 
-	import { functions, models } from '$lib/stores';
+	import { config, functions, models, settings } from '$lib/stores';
 	import { createNewFunction, getFunctions } from '$lib/apis/functions';
 	import FunctionEditor from '$lib/components/admin/Functions/FunctionEditor.svelte';
 	import { getModels } from '$lib/apis';
@@ -17,8 +17,11 @@
 	let func = null;
 
 	const saveHandler = async (data) => {
+		console.log(data);
+
 		const manifest = extractFrontmatter(data.content);
 		if (compareVersion(manifest?.required_open_webui_version ?? '0.0.0', WEBUI_VERSION)) {
+			console.log('Version is lower than required');
 			toast.error(
 				$i18n.t(
 					'Open WebUI version (v{{OPEN_WEBUI_VERSION}}) is lower than required version (v{{REQUIRED_VERSION}})',
@@ -44,7 +47,14 @@
 		if (res) {
 			toast.success($i18n.t('Function created successfully'));
 			functions.set(await getFunctions(localStorage.token));
-			models.set(await getModels(localStorage.token));
+			models.set(
+				await getModels(
+					localStorage.token,
+					$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null),
+					false,
+					true
+				)
+			);
 
 			await goto('/admin/functions');
 		}
@@ -60,6 +70,7 @@
 				return;
 
 			func = JSON.parse(event.data);
+			console.log(func);
 		});
 
 		if (window.opener ?? false) {
@@ -69,6 +80,8 @@
 		if (sessionStorage.function) {
 			func = JSON.parse(sessionStorage.function);
 			sessionStorage.removeItem('function');
+
+			console.log(func);
 			clone = true;
 		}
 
@@ -78,15 +91,17 @@
 
 {#if mounted}
 	{#key func?.content}
-		<FunctionEditor
-			id={func?.id ?? ''}
-			name={func?.name ?? ''}
-			meta={func?.meta ?? { description: '' }}
-			content={func?.content ?? ''}
-			{clone}
-			on:save={(e) => {
-				saveHandler(e.detail);
-			}}
-		/>
+		<div class="px-[16px] h-full">
+			<FunctionEditor
+				id={func?.id ?? ''}
+				name={func?.name ?? ''}
+				meta={func?.meta ?? { description: '' }}
+				content={func?.content ?? ''}
+				{clone}
+				onSave={(value) => {
+					saveHandler(value);
+				}}
+			/>
+		</div>
 	{/key}
 {/if}

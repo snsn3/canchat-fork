@@ -2,10 +2,7 @@
 	import { toast } from 'svelte-sonner';
 	import { goto, invalidate, invalidateAll } from '$app/navigation';
 	import { onMount, getContext, createEventDispatcher, tick, onDestroy } from 'svelte';
-	import type { Writable } from 'svelte/store';
-	import type { i18n as i18nType } from 'i18next';
-
-	const i18n: Writable<i18nType> = getContext('i18n');
+	const i18n = getContext('i18n');
 
 	const dispatch = createEventDispatcher();
 
@@ -18,7 +15,8 @@
 		getChatList,
 		getChatListByTagName,
 		getPinnedChatList,
-		updateChatById
+		updateChatById,
+		updateChatFolderIdById
 	} from '$lib/apis/chats';
 	import {
 		chatId,
@@ -28,7 +26,8 @@
 		pinnedChats,
 		showSidebar,
 		currentChatPage,
-		tags
+		tags,
+		selectedFolder
 	} from '$lib/stores';
 
 	import ChatMenu from './ChatMenu.svelte';
@@ -41,6 +40,8 @@
 	import Check from '$lib/components/icons/Check.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Document from '$lib/components/icons/Document.svelte';
+	import Sparkles from '$lib/components/icons/Sparkles.svelte';
+	import { generateTitle } from '$lib/apis';
 
 	export let className = '';
 
@@ -48,19 +49,17 @@
 	export let title;
 
 	export let selected = false;
-	export let isCurrentChat = false;
-	export let inSelectionMode = false;
+	export let shiftKey = false;
+
+	export let onDragEnd = () => {};
 
 	let chat = null;
 
 	let mouseOver = false;
 	let draggable = false;
-	let buttonID = '';
-
 	$: if (mouseOver) {
 		loadChat();
 	}
-	$: buttonID = `chat-menu-${id}`;
 
 	const loadChat = async () => {
 		if (!chat) {
@@ -78,20 +77,21 @@
 	const editChatTitle = async (id, title) => {
 		if (title === '') {
 			toast.error($i18n.t('Title cannot be an empty string.'));
-			return;
+		} else {
+			await updateChatById(localStorage.token, id, {
+				title: title
+			});
+
+			if (id === $chatId) {
+				_chatTitle.set(title);
+			}
+
+			currentChatPage.set(1);
+			await chats.set(await getChatList(localStorage.token, $currentChatPage));
+			await pinnedChats.set(await getPinnedChatList(localStorage.token));
+
+			dispatch('change');
 		}
-
-		await updateChatById(localStorage.token, id, { title });
-
-		if (id === $chatId) {
-			_chatTitle.set(title);
-		}
-
-		dispatch('change', { type: 'rename', chatId: id, title });
-
-		currentChatPage.set(1);
-		await chats.set(await getChatList(localStorage.token, $currentChatPage));
-		await pinnedChats.set(await getPinnedChatList(localStorage.token));
 	};
 
 	const cloneChatHandler = async (id) => {
@@ -112,7 +112,6 @@
 			currentChatPage.set(1);
 			await chats.set(await getChatList(localStorage.token, $currentChatPage));
 			await pinnedChats.set(await getPinnedChatList(localStorage.token));
-			toast.success($i18n.t('Chat cloned successfully. You are now in the new chat.'));
 		}
 	};
 
@@ -123,37 +122,52 @@
 		});
 
 		if (res) {
-			// Update stores reactively
 			tags.set(await getAllTags(localStorage.token));
-
-			// If deleting the current chat, navigate away first
 			if ($chatId === id) {
-				// Clear chatId first to prevent selection count issues
-				await chatId.set('');
 				await goto('/');
+
+				await chatId.set('');
 				await tick();
 			}
 
-			// Update chat lists immediately to ensure reactive state
-			currentChatPage.set(1);
-			await chats.set(await getChatList(localStorage.token, $currentChatPage));
-			await pinnedChats.set(await getPinnedChatList(localStorage.token));
-
-			dispatch('change', { buttonID: null });
+			dispatch('change');
 		}
 	};
 
 	const archiveChatHandler = async (id) => {
 		await archiveChatById(localStorage.token, id);
-		dispatch('change', { buttonID: null });
-		toast.success($i18n.t('Chat archived successfully'));
+		dispatch('change');
 	};
 
-	const focusEdit = async (node: HTMLInputElement) => {
-		node.focus();
+	const moveChatHandler = async (chatId, folderId) => {
+		if (chatId && folderId) {
+			const res = await updateChatFolderIdById(localStorage.token, chatId, folderId).catch(
+				(error) => {
+					toast.error(`${error}`);
+					return null;
+				}
+			);
+
+			if (res) {
+				currentChatPage.set(1);
+				await chats.set(await getChatList(localStorage.token, $currentChatPage));
+				await pinnedChats.set(await getPinnedChatList(localStorage.token));
+
+				dispatch('change');
+
+				toast.success($i18n.t('Chat moved successfully'));
+			}
+		} else {
+			toast.error($i18n.t('Failed to move chat'));
+		}
 	};
 
 	let itemElement;
+
+	let generating = false;
+
+	let ignoreBlur = false;
+	let doubleClicked = false;
 
 	let dragged = false;
 	let x = 0;
@@ -189,33 +203,118 @@
 		y = event.clientY;
 	};
 
-	const onDragEnd = (event) => {
+	const onDragEndHandler = (event) => {
 		event.stopPropagation();
 
 		itemElement.style.opacity = '1'; // Reset visual cue after drag
 		dragged = false;
+
+		onDragEnd(event);
+	};
+
+	const onClickOutside = (event) => {
+		if (!itemElement.contains(event.target)) {
+			if (confirmEdit) {
+				if (chatTitle !== title) {
+					editChatTitle(id, chatTitle);
+				}
+
+				confirmEdit = false;
+				chatTitle = '';
+			}
+		}
 	};
 
 	onMount(() => {
 		if (itemElement) {
+			document.addEventListener('click', onClickOutside, true);
+
 			// Event listener for when dragging starts
 			itemElement.addEventListener('dragstart', onDragStart);
 			// Event listener for when dragging occurs (optional)
 			itemElement.addEventListener('drag', onDrag);
 			// Event listener for when dragging ends
-			itemElement.addEventListener('dragend', onDragEnd);
+			itemElement.addEventListener('dragend', onDragEndHandler);
 		}
 	});
 
 	onDestroy(() => {
 		if (itemElement) {
+			document.removeEventListener('click', onClickOutside, true);
+
 			itemElement.removeEventListener('dragstart', onDragStart);
 			itemElement.removeEventListener('drag', onDrag);
-			itemElement.removeEventListener('dragend', onDragEnd);
+			itemElement.removeEventListener('dragend', onDragEndHandler);
 		}
 	});
 
 	let showDeleteConfirm = false;
+
+	const chatTitleInputKeydownHandler = (e) => {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			setTimeout(() => {
+				const input = document.getElementById(`chat-title-input-${id}`);
+				if (input) input.blur();
+			}, 0);
+		} else if (e.key === 'Escape') {
+			e.preventDefault();
+			confirmEdit = false;
+			chatTitle = '';
+		}
+	};
+
+	const renameHandler = async () => {
+		chatTitle = title;
+		confirmEdit = true;
+
+		await tick();
+
+		setTimeout(() => {
+			const input = document.getElementById(`chat-title-input-${id}`);
+			if (input) {
+				input.focus();
+				input.select();
+			}
+		}, 0);
+	};
+
+	const generateTitleHandler = async () => {
+		generating = true;
+		if (!chat) {
+			chat = await getChatById(localStorage.token, id);
+		}
+
+		const messages = (chat.chat?.messages ?? []).map((message) => {
+			return {
+				role: message.role,
+				content: message.content
+			};
+		});
+
+		const model = chat.chat.models.at(0) ?? chat.models.at(0) ?? '';
+
+		chatTitle = '';
+
+		const generatedTitle = await generateTitle(localStorage.token, model, messages).catch(
+			(error) => {
+				toast.error(`${error}`);
+				return null;
+			}
+		);
+
+		if (generatedTitle) {
+			if (generatedTitle !== title) {
+				editChatTitle(id, generatedTitle);
+			}
+
+			confirmEdit = false;
+		} else {
+			chatTitle = title;
+		}
+
+		generating = false;
+	};
 </script>
 
 <ShareChatModal bind:show={showShareChatModal} chatId={id} />
@@ -227,7 +326,7 @@
 		deleteChatHandler(id);
 	}}
 >
-	<div class=" text-sm text-gray-800 dark:text-gray-200 flex-1 line-clamp-3">
+	<div class=" text-sm text-gray-500 flex-1 line-clamp-3">
 		{$i18n.t('This will delete')} <span class="  font-semibold">{title}</span>.
 	</div>
 </DeleteConfirmDialog>
@@ -245,158 +344,105 @@
 	</DragGhost>
 {/if}
 
-<div bind:this={itemElement} class=" w-full {className} relative group" {draggable}>
+<div
+	id="sidebar-chat-group"
+	bind:this={itemElement}
+	class=" w-full {className} relative group"
+	draggable={draggable && !confirmEdit}
+>
 	{#if confirmEdit}
 		<div
-			class=" w-full flex justify-between rounded-lg px-[11px] py-[6px] {id === $chatId ||
+			id="sidebar-chat-item"
+			class=" w-full flex justify-between rounded-xl px-[11px] py-[6px] {id === $chatId ||
 			confirmEdit
-				? 'bg-gray-200 dark:bg-gray-900'
+				? 'bg-gray-100 dark:bg-gray-900 selected'
 				: selected
-					? 'bg-gray-100 dark:bg-gray-800'
-					: 'group-hover:bg-gray-100 dark:group-hover:bg-gray-950'} whitespace-nowrap text-ellipsis"
+					? 'bg-gray-100 dark:bg-gray-950 selected'
+					: 'group-hover:bg-gray-100 dark:group-hover:bg-gray-950'}  whitespace-nowrap text-ellipsis relative {generating
+				? 'cursor-not-allowed'
+				: ''}"
 		>
 			<input
-				use:focusEdit
-				bind:value={chatTitle}
 				id="chat-title-input-{id}"
-				class="bg-transparent w-full outline-none mr-10"
-				on:keydown={(e) => {
-					if (e.key === 'Enter') {
-						editChatTitle(id, chatTitle);
-						confirmEdit = false;
-						chatTitle = '';
+				bind:value={chatTitle}
+				class=" bg-transparent w-full outline-hidden mr-10"
+				placeholder={generating ? $i18n.t('Generating...') : ''}
+				disabled={generating}
+				on:keydown={chatTitleInputKeydownHandler}
+				on:blur={async (e) => {
+					if (doubleClicked) {
+						e.preventDefault();
+						e.stopPropagation();
+
+						await tick();
+						setTimeout(() => {
+							const input = document.getElementById(`chat-title-input-${id}`);
+							if (input) input.focus();
+						}, 0);
+
+						doubleClicked = false;
+						return;
 					}
 				}}
 			/>
 		</div>
 	{:else}
-		<Tooltip
-			content={title}
-			placement="bottom-start"
-			popperOptions={{
-				modifiers: [
-					{
-						name: 'offset',
-						options: {
-							offset: ({ reference }) => [reference.width / 2, 4]
-						}
-					}
-				]
-			}}
-		>
-			<a
-				class=" w-full flex justify-between rounded-lg px-[11px] py-[6px]
-				{isCurrentChat
-					? 'bg-gray-200 dark:bg-gray-900 border-2 border-gray-400 dark:border-gray-500'
-					: selected
-						? 'bg-gray-100 dark:bg-gray-800'
-						: 'group-hover:bg-gray-100 dark:group-hover:bg-gray-950'} whitespace-nowrap text-ellipsis"
-				href="/c/{id}"
-				on:click={(e) => {
-					// Check if the click was on the checkbox area, bulk actions, or chat menu
-					const target = e.target;
-					const clickedCheckbox = target && target.closest && target.closest('.checkbox-area');
-					const clickedBulkAction = target && target.closest && target.closest('button[title]');
-					const clickedDropdown =
-						target && target.closest && target.closest('[data-dropdown-trigger]');
+		<a
+			id="sidebar-chat-item"
+			class=" w-full flex justify-between rounded-xl px-[11px] py-[6px] {id === $chatId ||
+			confirmEdit
+				? 'bg-gray-100 dark:bg-gray-900 selected'
+				: selected
+					? 'bg-gray-100 dark:bg-gray-950 selected'
+					: ' group-hover:bg-gray-100 dark:group-hover:bg-gray-950'}  whitespace-nowrap text-ellipsis"
+			href="/c/{id}"
+			on:click={() => {
+				dispatch('select');
 
-					if (clickedDropdown) {
-						// Dropdown/menu clicked - do nothing, let it handle its own logic
-						e.preventDefault();
-						return;
-					} else if (clickedBulkAction) {
-						// Bulk action buttons handle their own clicks
-						return;
-					} else if (clickedCheckbox) {
-						// Clicked on checkbox - toggle selection
-						e.preventDefault();
-						if (selected) {
-							dispatch('unselect');
-						} else {
-							dispatch('select');
-						}
-					} else {
-						// Normal navigation
-						dispatch('navigate');
-						if ($mobile) {
-							showSidebar.set(false);
-						}
-					}
-				}}
-				on:dblclick={() => {
-					chatTitle = title;
-					confirmEdit = true;
-				}}
-				on:mouseenter={(e) => {
-					mouseOver = true;
-				}}
-				on:mouseleave={(e) => {
-					mouseOver = false;
-				}}
-				on:focus={(e) => {}}
-				draggable="false"
-			>
-				<div class=" flex self-center flex-1 w-full">
-					{#if inSelectionMode || mouseOver}
-						<!-- Show checkbox when in selection mode or on hover -->
-						<div
-							class="checkbox-area mr-2 flex items-center cursor-pointer p-1 -m-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
-						>
-							{#if selected}
-								<!-- Selected checkbox -->
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									class="w-4 h-4 text-gray-700 dark:text-gray-300"
-									viewBox="0 0 20 20"
-									fill="currentColor"
-								>
-									<path
-										fill-rule="evenodd"
-										d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-										clip-rule="evenodd"
-									/>
-								</svg>
-							{:else}
-								<!-- Empty checkbox -->
-								<div class="w-4 h-4 border-2 border-gray-300 dark:border-gray-600 rounded"></div>
-							{/if}
-						</div>
-					{:else if isCurrentChat}
-						<!-- Current chat indicator -->
-						<div class="mr-2 flex items-center">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								class="w-4 h-4 text-gray-600 dark:text-gray-400"
-								viewBox="0 0 20 20"
-								fill="currentColor"
-							>
-								<path
-									fill-rule="evenodd"
-									d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-									clip-rule="evenodd"
-								/>
-							</svg>
-						</div>
-					{/if}
-					<div class=" text-left self-center overflow-hidden w-full h-[20px]">
-						<span class="truncate">{title}</span>
-					</div>
+				if ($selectedFolder) {
+					selectedFolder.set(null);
+				}
+
+				if ($mobile) {
+					showSidebar.set(false);
+				}
+			}}
+			on:dblclick={async (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+
+				doubleClicked = true;
+				renameHandler();
+			}}
+			on:mouseenter={(e) => {
+				mouseOver = true;
+			}}
+			on:mouseleave={(e) => {
+				mouseOver = false;
+			}}
+			on:focus={(e) => {}}
+			draggable="false"
+		>
+			<div class=" flex self-center flex-1 w-full">
+				<div dir="auto" class=" text-left self-center overflow-hidden w-full h-[20px] truncate">
+					{title}
 				</div>
-			</a>
-		</Tooltip>
+			</div>
+		</a>
 	{/if}
 
 	<!-- svelte-ignore a11y-no-static-element-interactions -->
 	<div
+		id="sidebar-chat-item-menu"
 		class="
-        {selected
-			? 'from-transparent'
-			: id === $chatId || confirmEdit
-				? 'from-gray-200 dark:from-gray-900'
+        {id === $chatId || confirmEdit
+			? 'from-gray-100 dark:from-gray-900 selected'
+			: selected
+				? 'from-gray-100 dark:from-gray-950 selected'
 				: 'invisible group-hover:visible from-gray-100 dark:from-gray-950'}
             absolute {className === 'pr-2'
 			? 'right-[8px]'
-			: 'right-0'}  top-[4px] py-1 pr-0.5 mr-1.5 pl-5 bg-gradient-to-l from-80%
+			: 'right-1'} top-[4px] py-1 pr-0.5 mr-1.5 pl-5 bg-linear-to-l from-80%
 
               to-transparent"
 		on:mouseenter={(e) => {
@@ -410,65 +456,78 @@
 			<div
 				class="flex self-center items-center space-x-1.5 z-10 translate-y-[0.5px] -translate-x-[0.5px]"
 			>
-				<Tooltip content={$i18n.t('Confirm')}>
+				<Tooltip content={$i18n.t('Generate')}>
 					<button
-						class="self-center dark:hover:text-white transition"
+						class=" self-center dark:hover:text-white transition disabled:cursor-not-allowed"
+						id="generate-title-button"
+						disabled={generating}
 						on:click={() => {
-							editChatTitle(id, chatTitle);
-							confirmEdit = false;
-							chatTitle = '';
-							toast.success($i18n.t('Chat title saved.'));
+							generateTitleHandler();
 						}}
 					>
-						<Check className=" size-3.5" strokeWidth="2.5" />
+						<Sparkles strokeWidth="2" />
 					</button>
 				</Tooltip>
-
-				<Tooltip content={$i18n.t('Cancel')}>
+			</div>
+		{:else if shiftKey && mouseOver}
+			<div class=" flex items-center self-center space-x-1.5">
+				<Tooltip content={$i18n.t('Archive')} className="flex items-center">
 					<button
 						class=" self-center dark:hover:text-white transition"
 						on:click={() => {
-							confirmEdit = false;
-							chatTitle = '';
-							toast.success($i18n.t('Chat title rename cancelled'));
+							archiveChatHandler(id);
 						}}
+						type="button"
 					>
-						<XMark strokeWidth="2.5" />
+						<ArchiveBox className="size-4  translate-y-[0.5px]" strokeWidth="2" />
+					</button>
+				</Tooltip>
+
+				<Tooltip content={$i18n.t('Delete')}>
+					<button
+						class=" self-center dark:hover:text-white transition"
+						on:click={() => {
+							deleteChatHandler(id);
+						}}
+						type="button"
+					>
+						<GarbageBin strokeWidth="2" />
 					</button>
 				</Tooltip>
 			</div>
 		{:else}
-			<div class="flex self-center space-x-1 z-10">
-				<Tooltip content={$i18n.t('Chat Menu')}>
-					<ChatMenu
-						ariaLabel={$i18n.t('Chat Menu')}
-						chatId={id}
-						{buttonID}
-						cloneChatHandler={() => {
-							cloneChatHandler(id);
-						}}
-						archiveChatHandler={() => {
-							archiveChatHandler(id);
-						}}
-						renameHandler={async () => {
-							chatTitle = title;
-							confirmEdit = true;
-
-							await tick();
-							const input = document.getElementById(`chat-title-input-${id}`);
-							if (input) {
-								input.focus();
-							}
-						}}
-						buttonClass="dark:hover:bg-gray-850 rounded-lg touch-auto"
-						onClose={() => {
-							// Do nothing - menu closing should not affect selection
-						}}
-						on:change={async (e) => {
-							dispatch('change', e.detail);
-						}}
-						on:tag={(e) => {
-							dispatch('tag', e.detail);
+			<div class="flex self-center z-10 items-end">
+				<ChatMenu
+					chatId={id}
+					cloneChatHandler={() => {
+						cloneChatHandler(id);
+					}}
+					shareHandler={() => {
+						showShareChatModal = true;
+					}}
+					{moveChatHandler}
+					archiveChatHandler={() => {
+						archiveChatHandler(id);
+					}}
+					{renameHandler}
+					deleteHandler={() => {
+						showDeleteConfirm = true;
+					}}
+					onClose={() => {
+						dispatch('unselect');
+					}}
+					on:change={async () => {
+						dispatch('change');
+					}}
+					on:tag={(e) => {
+						dispatch('tag', e.detail);
+					}}
+				>
+					<button
+						aria-label="Chat Menu"
+						class=" self-center dark:hover:text-white transition m-0"
+						on:click={() => {
+							dispatch('select');
 						}}
 					>
 						<svg
@@ -481,8 +540,9 @@
 								d="M2 8a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0ZM6.5 8a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0ZM12.5 6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"
 							/>
 						</svg>
-					</ChatMenu>
-				</Tooltip>
+					</button>
+				</ChatMenu>
+
 				{#if id === $chatId}
 					<!-- Shortcut support using "delete-chat-button" id -->
 					<button
@@ -496,7 +556,7 @@
 							xmlns="http://www.w3.org/2000/svg"
 							viewBox="0 0 16 16"
 							fill="currentColor"
-							class="w-3 h-3"
+							class="w-4 h-4"
 						>
 							<path
 								d="M2 8a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0ZM6.5 8a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0ZM12.5 6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"

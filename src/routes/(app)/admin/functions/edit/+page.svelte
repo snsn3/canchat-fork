@@ -4,7 +4,7 @@
 
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { functions, models } from '$lib/stores';
+	import { config, functions, models, settings } from '$lib/stores';
 	import { updateFunctionById, getFunctions, getFunctionById } from '$lib/apis/functions';
 
 	import FunctionEditor from '$lib/components/admin/Functions/FunctionEditor.svelte';
@@ -18,8 +18,11 @@
 	let func = null;
 
 	const saveHandler = async (data) => {
+		console.log(data);
+
 		const manifest = extractFrontmatter(data.content);
 		if (compareVersion(manifest?.required_open_webui_version ?? '0.0.0', WEBUI_VERSION)) {
+			console.log('Version is lower than required');
 			toast.error(
 				$i18n.t(
 					'Open WebUI version (v{{OPEN_WEBUI_VERSION}}) is lower than required version (v{{REQUIRED_VERSION}})',
@@ -45,11 +48,19 @@
 		if (res) {
 			toast.success($i18n.t('Function updated successfully'));
 			functions.set(await getFunctions(localStorage.token));
-			models.set(await getModels(localStorage.token));
+			models.set(
+				await getModels(
+					localStorage.token,
+					$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null),
+					false,
+					true
+				)
+			);
 		}
 	};
 
 	onMount(async () => {
+		console.log('mounted');
 		const id = $page.url.searchParams.get('id');
 
 		if (id) {
@@ -58,25 +69,29 @@
 				goto('/admin/functions');
 				return null;
 			});
+
+			console.log(func);
 		}
 	});
 </script>
 
 {#if func}
-	<FunctionEditor
-		edit={true}
-		id={func.id}
-		name={func.name}
-		meta={func.meta}
-		content={func.content}
-		on:save={(e) => {
-			saveHandler(e.detail);
-		}}
-	/>
+	<div class="px-[16px] h-full">
+		<FunctionEditor
+			edit={true}
+			id={func.id}
+			name={func.name}
+			meta={func.meta}
+			content={func.content}
+			onSave={(value) => {
+				saveHandler(value);
+			}}
+		/>
+	</div>
 {:else}
 	<div class="flex items-center justify-center h-full">
 		<div class=" pb-16">
-			<Spinner />
+			<Spinner className="size-5" />
 		</div>
 	</div>
 {/if}

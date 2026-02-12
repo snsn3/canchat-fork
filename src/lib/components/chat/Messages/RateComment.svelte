@@ -2,8 +2,9 @@
 	import { toast } from 'svelte-sonner';
 
 	import { createEventDispatcher, onMount, getContext } from 'svelte';
-	import { config, models } from '$lib/stores';
+	import { config, models, tags as _tags } from '$lib/stores';
 	import Tags from '$lib/components/common/Tags.svelte';
+	import XMark from '$lib/components/icons/XMark.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -11,7 +12,6 @@
 
 	export let message;
 	export let show = false;
-	export let disabled = false;
 
 	let LIKE_REASONS = [
 		'accurate_information',
@@ -81,39 +81,12 @@
 		}
 	});
 
-	// Form validity tracking
-	$: formValid =
-		message?.annotation?.rating !== undefined &&
-		detailedRating !== null &&
-		selectedReason !== null &&
-		selectedReason !== '' &&
-		comment !== null &&
-		comment.trim() !== '';
-
-	function handleDetailedRatingClick(rating) {
-		detailedRating = rating;
-	}
-
-	function handleReasonSelect(reason) {
-		selectedReason = reason;
-	}
-
-	function handleCommentInput(event) {
-		comment = event.target.value;
-	}
-
 	const saveHandler = () => {
-		// Don't allow saving if disabled (tags are being generated)
-		if (disabled) {
-			toast.error($i18n.t('Please wait while tags are being generated...'));
-			return;
-		}
-
-		// Validate form before saving
-		if (!formValid) {
-			toast.error($i18n.t('Please fill in rating, reason and comment'));
-			return;
-		}
+		console.log('saveHandler');
+		// if (!selectedReason) {
+		// 	toast.error($i18n.t('Please select a reason'));
+		// 	return;
+		// }
 
 		dispatch('save', {
 			reason: selectedReason,
@@ -138,7 +111,7 @@
 {/if}
 
 <div
-	class=" my-2.5 rounded-xl px-4 py-3 border border-gray-50 dark:border-gray-850"
+	class=" my-2.5 rounded-xl px-4 py-3 border border-gray-100/30 dark:border-gray-850/30"
 	id="message-feedback-{message.id}"
 >
 	<div class="flex justify-between items-center">
@@ -151,30 +124,23 @@
 				show = false;
 			}}
 		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				fill="none"
-				viewBox="0 0 24 24"
-				stroke-width="1.5"
-				stroke="currentColor"
-				class="size-4"
-			>
-				<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-			</svg>
+			<XMark className={'size-4'} />
 		</button>
 	</div>
 
 	<div class="w-full flex justify-center">
-		<div class=" relative w-fit">
-			<div class="mt-1.5 w-fit flex gap-1 pb-5">
+		<div class=" relative w-fit overflow-x-auto scrollbar-none">
+			<div class="mt-1.5 w-fit flex gap-1 pb-2">
 				<!-- 1-10 scale -->
 				{#each Array.from({ length: 10 }).map((_, i) => i + 1) as rating}
 					<button
-						class="size-7 text-sm border border-gray-50 dark:border-gray-850 hover:bg-gray-50 dark:hover:bg-gray-850 {detailedRating ===
+						class="size-7 text-sm border border-gray-100/30 dark:border-gray-850/30 hover:bg-gray-50 dark:hover:bg-gray-850 {detailedRating ===
 						rating
 							? 'bg-gray-100 dark:bg-gray-800'
-							: ''} transition rounded-full disabled:cursor-not-allowed disabled:text-gray-500 disabled:bg-white disabled:dark:bg-gray-900"
-						on:click={() => handleDetailedRatingClick(rating)}
+							: ''} transition rounded-full disabled:cursor-not-allowed disabled:text-gray-500 disabled:bg-white dark:disabled:bg-gray-900"
+						on:click={() => {
+							detailedRating = rating;
+						}}
 						disabled={message?.annotation?.rating === -1 ? rating > 5 : rating < 6}
 					>
 						{rating}
@@ -182,7 +148,7 @@
 				{/each}
 			</div>
 
-			<div class="absolute bottom-0 left-0 right-0 flex justify-between text-xs">
+			<div class="sticky top-0 bottom-0 left-0 right-0 flex justify-between text-xs">
 				<div>
 					1 - {$i18n.t('Awful')}
 				</div>
@@ -196,18 +162,18 @@
 
 	<div>
 		{#if reasons.length > 0}
-			<div class="text-sm mt-1.5 font-medium">
-				{$i18n.t('Why?')} <span class="text-red-500">*</span>
-			</div>
+			<div class="text-sm mt-1.5 font-medium">{$i18n.t('Why?')}</div>
 
 			<div class="flex flex-wrap gap-1.5 text-sm mt-1.5">
 				{#each reasons as reason}
 					<button
-						class="px-3 py-0.5 border border-gray-50 dark:border-gray-850 hover:bg-gray-50 dark:hover:bg-gray-850 {selectedReason ===
+						class="px-3 py-0.5 border border-gray-100/30 dark:border-gray-850/30 hover:bg-gray-50 dark:hover:bg-gray-850 {selectedReason ===
 						reason
 							? 'bg-gray-100 dark:bg-gray-800'
 							: ''} transition rounded-xl"
-						on:click={() => handleReasonSelect(reason)}
+						on:click={() => {
+							selectedReason = reason;
+						}}
 					>
 						{#if reason === 'accurate_information'}
 							{$i18n.t('Accurate information')}
@@ -247,13 +213,9 @@
 	</div>
 
 	<div class="mt-2">
-		<div class="text-sm mb-1 font-medium">
-			{$i18n.t('Comment')} <span class="text-red-500">*</span>
-		</div>
 		<textarea
 			bind:value={comment}
-			on:input={handleCommentInput}
-			class="w-full text-sm px-1 py-2 bg-transparent outline-none resize-none rounded-xl border border-gray-100 dark:border-gray-800"
+			class="w-full text-sm px-1 py-2 bg-transparent outline-hidden resize-none rounded-xl"
 			placeholder={$i18n.t('Feel free to add specific details')}
 			rows="3"
 		/>
@@ -263,6 +225,7 @@
 		<div class="flex items-end group">
 			<Tags
 				{tags}
+				suggestionTags={$_tags ?? []}
 				on:delete={(e) => {
 					tags = tags.filter(
 						(tag) =>
@@ -277,11 +240,12 @@
 		</div>
 
 		<button
-			class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-			on:click={saveHandler}
-			disabled={!formValid || disabled}
+			class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
+			on:click={() => {
+				saveHandler();
+			}}
 		>
-			{disabled ? $i18n.t('Generating tags...') : $i18n.t('Save')}
+			{$i18n.t('Save')}
 		</button>
 	</div>
 </div>

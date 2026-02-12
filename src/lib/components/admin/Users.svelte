@@ -4,36 +4,39 @@
 
 	import { goto } from '$app/navigation';
 	import { user } from '$lib/stores';
-
-	import { getUsers } from '$lib/apis/users';
+	import { page } from '$app/stores';
 
 	import UserList from './Users/UserList.svelte';
 	import Groups from './Users/Groups.svelte';
-	import Domains from './Users/Settings/Domains.svelte';
 
 	const i18n = getContext('i18n');
 
-	let users = [];
-
-	let selectedTab = 'overview';
-	let loaded = false;
-
-	$: if (selectedTab) {
-		getUsersHandler();
+	let selectedTab;
+	$: {
+		const pathParts = $page.url.pathname.split('/');
+		const tabFromPath = pathParts[pathParts.length - 1];
+		selectedTab = ['overview', 'groups'].includes(tabFromPath) ? tabFromPath : 'overview';
 	}
 
-	const getUsersHandler = async () => {
-		if (selectedTab === 'overview' || selectedTab === 'groups') {
-			users = await getUsers(localStorage.token);
+	$: if (selectedTab) {
+		// scroll to selectedTab
+		scrollToTab(selectedTab);
+	}
+
+	const scrollToTab = (tabId) => {
+		const tabElement = document.getElementById(tabId);
+		if (tabElement) {
+			tabElement.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
 		}
 	};
+
+	let loaded = false;
 
 	onMount(async () => {
 		if ($user?.role !== 'admin') {
 			await goto('/');
-		} else {
-			users = await getUsers(localStorage.token);
 		}
+
 		loaded = true;
 
 		const containerElement = document.getElementById('users-tabs-container');
@@ -46,21 +49,25 @@
 				}
 			});
 		}
+
+		// Scroll to the selected tab on mount
+		scrollToTab(selectedTab);
 	});
 </script>
 
 <div class="flex flex-col lg:flex-row w-full h-full pb-2 lg:space-x-4">
 	<div
 		id="users-tabs-container"
-		class=" flex flex-row overflow-x-auto gap-2.5 max-w-full lg:gap-1 lg:flex-col lg:flex-none lg:w-40 dark:text-gray-200 text-sm font-medium text-left scrollbar-none"
+		class="mx-[16px] lg:mx-0 lg:px-[16px] flex flex-row overflow-x-auto gap-2.5 max-w-full lg:gap-1 lg:flex-col lg:flex-none lg:w-50 dark:text-gray-200 text-sm font-medium text-left scrollbar-none"
 	>
 		<button
+			id="overview"
 			class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex text-right transition {selectedTab ===
 			'overview'
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				selectedTab = 'overview';
+				goto('/admin/users/overview');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -79,12 +86,13 @@
 		</button>
 
 		<button
+			id="groups"
 			class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex text-right transition {selectedTab ===
 			'groups'
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				selectedTab = 'groups';
+				goto('/admin/users/groups');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -101,44 +109,13 @@
 			</div>
 			<div class=" self-center">{$i18n.t('Groups')}</div>
 		</button>
-
-		<button
-			class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex text-right transition {selectedTab ===
-			'domains'
-				? ''
-				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
-			on:click={() => {
-				selectedTab = 'domains';
-			}}
-		>
-			<div class=" self-center mr-2">
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 24 24"
-					fill="currentColor"
-					class="w-4 h-4"
-				>
-					<path
-						fill-rule="evenodd"
-						d="M17.834 6.166a8.25 8.25 0 1 0 0 11.668.75.75 0 0 1 1.06 1.06c-3.807 3.808-9.98 3.808-13.788 0-3.808-3.807-3.808-9.98 0-13.788 3.807-3.808 9.98-3.808 13.788 0A9.722 9.722 0 0 1 21.75 12c0 .975-.296 1.887-.809 2.571-.514.685-1.28 1.179-2.191 1.179-.904 0-1.666-.487-2.18-1.164a5.25 5.25 0 1 1-.82-6.26V8.25a.75.75 0 0 1 1.5 0V12a3.75 3.75 0 1 0-3.75-3.75.75.75 0 0 1-1.5 0 5.25 5.25 0 1 1 5.25 5.25c-.536 0-1.036-.232-1.414-.645a3.75 3.75 0 0 1-.336-.48z"
-						clip-rule="evenodd"
-					/>
-					<path
-						d="M5.25 2.25a.75.75 0 01.75-.75h12a.75.75 0 01.75.75v2.25a.75.75 0 01-.75.75H6a.75.75 0 01-.75-.75V2.25z"
-					/>
-				</svg>
-			</div>
-			<div class=" self-center">{$i18n.t('Domains')}</div>
-		</button>
 	</div>
 
-	<div class="flex-1 mt-1 lg:mt-0 overflow-y-scroll">
+	<div class="flex-1 mt-1 lg:mt-0 px-[16px] lg:pr-[16px] lg:pl-0 overflow-y-scroll">
 		{#if selectedTab === 'overview'}
-			<UserList {users} />
+			<UserList />
 		{:else if selectedTab === 'groups'}
-			<Groups {users} />
-		{:else if selectedTab === 'domains'}
-			<Domains />
+			<Groups />
 		{/if}
 	</div>
 </div>
