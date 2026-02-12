@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import FileResponse
 
 from open_webui.constants import ERROR_MESSAGES
@@ -25,7 +25,7 @@ router = APIRouter()
 
 
 @router.get("/{artifact_id}", response_model=ArtifactResponse)
-async def get_artifact_metadata(artifact_id: str, user=Depends(get_verified_user)):
+async def get_artifact_metadata(artifact_id: str, request: Request, user=Depends(get_verified_user)):
     """
     Get metadata for a specific artifact.
     Users can only access their own artifacts unless they are admins.
@@ -46,9 +46,8 @@ async def get_artifact_metadata(artifact_id: str, user=Depends(get_verified_user
         )
     
     # Build URL
-    from open_webui.config import CANCHAT_PUBLIC_URL, WEBUI_URL
-    base_url = CANCHAT_PUBLIC_URL or WEBUI_URL
-    base_url = base_url.rstrip("/")
+    base_url = (request.app.state.config.CANCHAT_PUBLIC_URL or request.app.state.config.WEBUI_URL)
+    base_url = base_url.rstrip("/") if base_url else "http://localhost:3000"
     url = f"{base_url}/api/v1/artifacts/{artifact_id}/content"
     
     return ArtifactResponse(
@@ -120,7 +119,6 @@ async def download_artifact_content(artifact_id: str, user=Depends(get_verified_
         )
     except Exception as e:
         log.exception(e)
-        log.error(f"Error downloading artifact {artifact_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=ERROR_MESSAGES.DEFAULT("Error downloading artifact"),
@@ -133,7 +131,7 @@ async def download_artifact_content(artifact_id: str, user=Depends(get_verified_
 
 
 @router.get("/", response_model=list[ArtifactResponse])
-async def list_user_artifacts(user=Depends(get_verified_user)):
+async def list_user_artifacts(request: Request, user=Depends(get_verified_user)):
     """
     List all artifacts for the current user.
     Admins can see all artifacts.
@@ -144,9 +142,8 @@ async def list_user_artifacts(user=Depends(get_verified_user)):
         artifacts = Artifacts.get_artifacts_by_user_id(user.id)
     
     # Build URLs for each artifact
-    from open_webui.config import CANCHAT_PUBLIC_URL, WEBUI_URL
-    base_url = CANCHAT_PUBLIC_URL or WEBUI_URL
-    base_url = base_url.rstrip("/")
+    base_url = (request.app.state.config.CANCHAT_PUBLIC_URL or request.app.state.config.WEBUI_URL)
+    base_url = base_url.rstrip("/") if base_url else "http://localhost:3000"
     
     return [
         ArtifactResponse(
@@ -198,7 +195,6 @@ async def delete_artifact(artifact_id: str, user=Depends(get_verified_user)):
             )
     except Exception as e:
         log.exception(e)
-        log.error(f"Error deleting artifact {artifact_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=ERROR_MESSAGES.DEFAULT("Error deleting artifact"),
