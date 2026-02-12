@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount } from 'svelte';
-	import { models, config, returnFocusButtonID } from '$lib/stores';
+	import { models, config } from '$lib/stores';
 
 	import { toast } from 'svelte-sonner';
 	import { deleteSharedChatById, getChatById, shareChatById } from '$lib/apis/chats';
@@ -8,6 +8,7 @@
 
 	import Modal from '../common/Modal.svelte';
 	import Link from '../icons/Link.svelte';
+	import XMark from '$lib/components/icons/XMark.svelte';
 
 	export let chatId;
 
@@ -20,6 +21,7 @@
 
 		const sharedChat = await shareChatById(localStorage.token, chatId);
 		shareUrl = `${window.location.origin}/s/${sharedChat.id}`;
+		console.log(shareUrl);
 		chat = await getChatById(localStorage.token, chatId);
 
 		return shareUrl;
@@ -27,7 +29,9 @@
 
 	const shareChat = async () => {
 		const _chat = chat.chat;
-		toast.success($i18n.t('Redirecting you to OpenWebUI Community'));
+		console.log('share', _chat);
+
+		toast.success($i18n.t('Redirecting you to Open WebUI Community'));
 		const url = 'https://openwebui.com';
 		// const url = 'http://localhost:5173';
 
@@ -71,36 +75,23 @@
 				}
 			} else {
 				chat = null;
+				console.log(chat);
 			}
 		})();
 	}
 </script>
 
-<Modal
-	bind:show
-	size="md"
-	title={$i18n.t('Share Chat')}
-	returnFocusSelector={`#${$returnFocusButtonID}`}
->
+<Modal bind:show size="md">
 	<div>
 		<div class=" flex justify-between dark:text-gray-300 px-5 pt-4 pb-0.5">
-			<h2 class=" text-lg font-medium self-center">{$i18n.t('Share Chat')}</h2>
+			<div class=" text-lg font-medium self-center">{$i18n.t('Share Chat')}</div>
 			<button
 				class="self-center"
 				on:click={() => {
 					show = false;
 				}}
 			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="w-5 h-5"
-				>
-					<path
-						d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"
-					/>
-				</svg>
+				<XMark className={'size-5'} />
 			</button>
 		</div>
 
@@ -144,7 +135,7 @@
 										show = false;
 									}}
 								>
-									{$i18n.t('Share to OpenWebUI Community')}
+									{$i18n.t('Share to Open WebUI Community')}
 								</button>
 							{/if}
 
@@ -156,6 +147,9 @@
 									const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
 									if (isSafari) {
+										// Oh, Safari, you're so special, let's give you some extra love and attention
+										console.log('isSafari');
+
 										const getUrlPromise = async () => {
 											const url = await shareLocalChat();
 											return new Blob([url], { type: 'text/plain' });
@@ -168,6 +162,7 @@
 												})
 											])
 											.then(() => {
+												console.log('Async: Copying to clipboard was successful!');
 												return true;
 											})
 											.catch((error) => {

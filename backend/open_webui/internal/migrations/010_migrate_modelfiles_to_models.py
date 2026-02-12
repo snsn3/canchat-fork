@@ -33,7 +33,7 @@ import json
 from open_webui.utils.misc import parse_ollama_modelfile
 
 with suppress(ImportError):
-    pass
+    import playhouse.postgres_ext as pw_pext
 
 
 def migrate(migrator: Migrator, database: pw.Database, *, fake=False):

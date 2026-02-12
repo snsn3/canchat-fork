@@ -12,7 +12,10 @@
 	import PromptEditor from '$lib/components/workspace/Prompts/PromptEditor.svelte';
 
 	let prompt = null;
+	let disabled = false;
+
 	const onSubmit = async (_prompt) => {
+		console.log(_prompt);
 		const prompt = await updatePromptByCommand(localStorage.token, _prompt).catch((error) => {
 			toast.error(`${error}`);
 			return null;
@@ -28,22 +31,21 @@
 	onMount(async () => {
 		const command = $page.url.searchParams.get('command');
 		if (command) {
-			// Ensure proper command format before sending to the API
-			const sanitizedCommand = command.replace(/\//g, '');
-
-			const _prompt = await getPromptByCommand(localStorage.token, sanitizedCommand).catch(
-				(error) => {
-					toast.error(`${error}`);
-					return null;
-				}
-			);
+			const _prompt = await getPromptByCommand(
+				localStorage.token,
+				command.replace(/\//g, '')
+			).catch((error) => {
+				toast.error(`${error}`);
+				return null;
+			});
 
 			if (_prompt) {
+				disabled = !_prompt.write_access ?? true;
 				prompt = {
 					title: _prompt.title,
 					command: _prompt.command,
 					content: _prompt.content,
-					access_control: _prompt?.access_control ?? null
+					access_control: _prompt?.access_control === undefined ? {} : _prompt?.access_control
 				};
 			} else {
 				goto('/workspace/prompts');
@@ -55,5 +57,5 @@
 </script>
 
 {#if prompt}
-	<PromptEditor {prompt} {onSubmit} edit />
+	<PromptEditor {prompt} {onSubmit} {disabled} edit />
 {/if}

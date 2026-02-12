@@ -1,23 +1,26 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 import logging
+import asyncio
 from typing import Optional
 
 from open_webui.models.memories import Memories, MemoryModel
-from open_webui.retrieval.vector.connector import VECTOR_DB_CLIENT
+from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
 from open_webui.utils.auth import get_verified_user
-from open_webui.env import SRC_LOG_LEVELS
+from open_webui.internal.db import get_session
+from sqlalchemy.orm import Session
 
+from open_webui.utils.access_control import has_permission
+from open_webui.constants import ERROR_MESSAGES
 
 log = logging.getLogger(__name__)
-log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
 router = APIRouter()
 
 
 @router.get("/ef")
 async def get_embeddings(request: Request):
-    return {"result": request.app.state.EMBEDDING_FUNCTION("hello world")}
+    return {"result": await request.app.state.EMBEDDING_FUNCTION("hello world")}
 
 
 ############################
@@ -26,8 +29,26 @@ async def get_embeddings(request: Request):
 
 
 @router.get("/", response_model=list[MemoryModel])
-async def get_memories(user=Depends(get_verified_user)):
-    return Memories.get_memories_by_user_id(user.id)
+async def get_memories(
+    request: Request,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    if not request.app.state.config.ENABLE_MEMORIES:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    if not has_permission(
+        user.id, "features.memories", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    return Memories.get_memories_by_user_id(user.id, db=db)
 
 
 ############################
@@ -48,16 +69,33 @@ async def add_memory(
     request: Request,
     form_data: AddMemoryForm,
     user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
 ):
-    memory = Memories.insert_new_memory(user.id, form_data.content)
+    if not request.app.state.config.ENABLE_MEMORIES:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
 
-    await VECTOR_DB_CLIENT.upsert(
+    if not has_permission(
+        user.id, "features.memories", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    memory = Memories.insert_new_memory(user.id, form_data.content, db=db)
+
+    vector = await request.app.state.EMBEDDING_FUNCTION(memory.content, user=user)
+
+    VECTOR_DB_CLIENT.upsert(
         collection_name=f"user-memory-{user.id}",
         items=[
             {
                 "id": memory.id,
                 "text": memory.content,
-                "vector": request.app.state.EMBEDDING_FUNCTION(memory.content),
+                "vector": vector,
                 "metadata": {"created_at": memory.created_at},
             }
         ],
@@ -78,11 +116,34 @@ class QueryMemoryForm(BaseModel):
 
 @router.post("/query")
 async def query_memory(
-    request: Request, form_data: QueryMemoryForm, user=Depends(get_verified_user)
+    request: Request,
+    form_data: QueryMemoryForm,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
 ):
-    results = await VECTOR_DB_CLIENT.search(
+    if not request.app.state.config.ENABLE_MEMORIES:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    if not has_permission(
+        user.id, "features.memories", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    memories = Memories.get_memories_by_user_id(user.id, db=db)
+    if not memories:
+        raise HTTPException(status_code=404, detail="No memories found for user")
+
+    vector = await request.app.state.EMBEDDING_FUNCTION(form_data.content, user=user)
+
+    results = VECTOR_DB_CLIENT.search(
         collection_name=f"user-memory-{user.id}",
-        vectors=[request.app.state.EMBEDDING_FUNCTION(form_data.content)],
+        vectors=[vector],
         limit=form_data.k,
     )
 
@@ -94,24 +155,49 @@ async def query_memory(
 ############################
 @router.post("/reset", response_model=bool)
 async def reset_memory_from_vector_db(
-    request: Request, user=Depends(get_verified_user)
+    request: Request,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
 ):
-    await VECTOR_DB_CLIENT.delete_collection(f"user-memory-{user.id}")
+    if not request.app.state.config.ENABLE_MEMORIES:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
 
-    memories = Memories.get_memories_by_user_id(user.id)
-    await VECTOR_DB_CLIENT.upsert(
+    if not has_permission(
+        user.id, "features.memories", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    VECTOR_DB_CLIENT.delete_collection(f"user-memory-{user.id}")
+
+    memories = Memories.get_memories_by_user_id(user.id, db=db)
+
+    # Generate vectors in parallel
+    vectors = await asyncio.gather(
+        *[
+            request.app.state.EMBEDDING_FUNCTION(memory.content, user=user)
+            for memory in memories
+        ]
+    )
+
+    VECTOR_DB_CLIENT.upsert(
         collection_name=f"user-memory-{user.id}",
         items=[
             {
                 "id": memory.id,
                 "text": memory.content,
-                "vector": request.app.state.EMBEDDING_FUNCTION(memory.content),
+                "vector": vectors[idx],
                 "metadata": {
                     "created_at": memory.created_at,
                     "updated_at": memory.updated_at,
                 },
             }
-            for memory in memories
+            for idx, memory in enumerate(memories)
         ],
     )
 
@@ -124,12 +210,30 @@ async def reset_memory_from_vector_db(
 
 
 @router.delete("/delete/user", response_model=bool)
-async def delete_memory_by_user_id(user=Depends(get_verified_user)):
-    result = Memories.delete_memories_by_user_id(user.id)
+async def delete_memory_by_user_id(
+    request: Request,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    if not request.app.state.config.ENABLE_MEMORIES:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    if not has_permission(
+        user.id, "features.memories", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    result = Memories.delete_memories_by_user_id(user.id, db=db)
 
     if result:
         try:
-            await VECTOR_DB_CLIENT.delete_collection(f"user-memory-{user.id}")
+            VECTOR_DB_CLIENT.delete_collection(f"user-memory-{user.id}")
         except Exception as e:
             log.error(e)
         return True
@@ -148,19 +252,38 @@ async def update_memory_by_id(
     request: Request,
     form_data: MemoryUpdateModel,
     user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
 ):
-    memory = Memories.update_memory_by_id(memory_id, form_data.content)
+    if not request.app.state.config.ENABLE_MEMORIES:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    if not has_permission(
+        user.id, "features.memories", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    memory = Memories.update_memory_by_id_and_user_id(
+        memory_id, user.id, form_data.content, db=db
+    )
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory not found")
 
     if form_data.content is not None:
-        await VECTOR_DB_CLIENT.upsert(
+        vector = await request.app.state.EMBEDDING_FUNCTION(memory.content, user=user)
+
+        VECTOR_DB_CLIENT.upsert(
             collection_name=f"user-memory-{user.id}",
             items=[
                 {
                     "id": memory.id,
                     "text": memory.content,
-                    "vector": request.app.state.EMBEDDING_FUNCTION(memory.content),
+                    "vector": vector,
                     "metadata": {
                         "created_at": memory.created_at,
                         "updated_at": memory.updated_at,
@@ -178,11 +301,30 @@ async def update_memory_by_id(
 
 
 @router.delete("/{memory_id}", response_model=bool)
-async def delete_memory_by_id(memory_id: str, user=Depends(get_verified_user)):
-    result = Memories.delete_memory_by_id_and_user_id(memory_id, user.id)
+async def delete_memory_by_id(
+    memory_id: str,
+    request: Request,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    if not request.app.state.config.ENABLE_MEMORIES:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    if not has_permission(
+        user.id, "features.memories", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    result = Memories.delete_memory_by_id_and_user_id(memory_id, user.id, db=db)
 
     if result:
-        await VECTOR_DB_CLIENT.delete(
+        VECTOR_DB_CLIENT.delete(
             collection_name=f"user-memory-{user.id}", ids=[memory_id]
         )
         return True

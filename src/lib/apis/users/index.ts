@@ -16,7 +16,7 @@ export const getUserGroups = async (token: string) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -43,7 +43,7 @@ export const getUserDefaultPermissions = async (token: string) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -73,7 +73,7 @@ export const updateUserDefaultPermissions = async (token: string, permissions: o
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -104,7 +104,7 @@ export const updateUserRole = async (token: string, id: string, role: string) =>
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -116,10 +116,33 @@ export const updateUserRole = async (token: string, id: string, role: string) =>
 	return res;
 };
 
-export const getUsers = async (token: string) => {
+export const getUsers = async (
+	token: string,
+	query?: string,
+	orderBy?: string,
+	direction?: string,
+	page = 1
+) => {
 	let error = null;
+	let res = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/users/`, {
+	const searchParams = new URLSearchParams();
+
+	searchParams.set('page', `${page}`);
+
+	if (query) {
+		searchParams.set('query', query);
+	}
+
+	if (orderBy) {
+		searchParams.set('order_by', orderBy);
+	}
+
+	if (direction) {
+		searchParams.set('direction', direction);
+	}
+
+	res = await fetch(`${WEBUI_API_BASE_URL}/users/?${searchParams.toString()}`, {
 		method: 'GET',
 		headers: {
 			'Content-Type': 'application/json',
@@ -131,7 +154,7 @@ export const getUsers = async (token: string) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -140,7 +163,85 @@ export const getUsers = async (token: string) => {
 		throw error;
 	}
 
-	return res ? res : [];
+	return res;
+};
+
+export const searchUsers = async (
+	token: string,
+	query?: string,
+	orderBy?: string,
+	direction?: string,
+	page = 1
+) => {
+	let error = null;
+	let res = null;
+
+	const searchParams = new URLSearchParams();
+
+	searchParams.set('page', `${page}`);
+
+	if (query) {
+		searchParams.set('query', query);
+	}
+
+	if (orderBy) {
+		searchParams.set('order_by', orderBy);
+	}
+
+	if (direction) {
+		searchParams.set('direction', direction);
+	}
+
+	res = await fetch(`${WEBUI_API_BASE_URL}/users/search?${searchParams.toString()}`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const getAllUsers = async (token: string) => {
+	let error = null;
+	let res = null;
+
+	res = await fetch(`${WEBUI_API_BASE_URL}/users/all`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
 };
 
 export const getUserSettings = async (token: string) => {
@@ -157,7 +258,7 @@ export const getUserSettings = async (token: string) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -187,7 +288,7 @@ export const updateUserSettings = async (token: string, settings: object) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -197,53 +298,6 @@ export const updateUserSettings = async (token: string, settings: object) => {
 	}
 
 	return res;
-};
-
-// Timezone-specific helper functions
-export const getUserTimezoneFromSettings = async (token: string): Promise<string | null> => {
-	try {
-		const settings = await getUserSettings(token);
-		return settings?.timezone || null;
-	} catch (error) {
-		console.error('Failed to get user timezone from settings:', error);
-		return null;
-	}
-};
-
-export const updateUserTimezone = async (token: string, timezone: string) => {
-	try {
-		const currentSettings = await getUserSettings(token);
-		const updatedSettings = {
-			...currentSettings,
-			timezone: timezone
-		};
-		return await updateUserSettings(token, updatedSettings);
-	} catch (error) {
-		console.error('Failed to update user timezone:', error);
-		throw error;
-	}
-};
-
-export const detectAndUpdateUserTimezone = async (token: string) => {
-	try {
-		// Get current user's timezone from browser
-		const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-		// Get stored timezone preference
-		const storedTimezone = await getUserTimezoneFromSettings(token);
-
-		// Update only if timezone has changed or is not set
-		if (!storedTimezone || storedTimezone !== detectedTimezone) {
-			await updateUserTimezone(token, detectedTimezone);
-			console.log(`Updated user timezone to: ${detectedTimezone}`);
-		}
-
-		return detectedTimezone;
-	} catch (error) {
-		console.error('Failed to detect and update user timezone:', error);
-		// Return Toronto timezone as default for Canadian users
-		return 'America/Toronto';
-	}
 };
 
 export const getUserById = async (token: string, userId: string) => {
@@ -261,7 +315,37 @@ export const getUserById = async (token: string, userId: string) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const updateUserStatus = async (token: string, formData: object) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/users/user/status/update`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			...formData
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -287,33 +371,7 @@ export const getUserInfo = async (token: string) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
-			error = err.detail;
-			return null;
-		});
-
-	if (error) {
-		throw error;
-	}
-
-	return res;
-};
-
-export const getUserRole = async (token: string) => {
-	let error = null;
-	const res = await fetch(`${WEBUI_API_BASE_URL}/users/user/role`, {
-		method: 'GET',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${token}`
-		}
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -343,7 +401,7 @@ export const updateUserInfo = async (token: string, info: object) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -357,15 +415,44 @@ export const updateUserInfo = async (token: string, info: object) => {
 
 export const getAndUpdateUserLocation = async (token: string) => {
 	const location = await getUserPosition().catch((err) => {
-		throw err;
+		console.error(err);
+		return null;
 	});
 
 	if (location) {
 		await updateUserInfo(token, { location: location });
 		return location;
 	} else {
-		throw new Error('Failed to get user location');
+		console.info('Failed to get user location');
+		return null;
 	}
+};
+
+export const getUserActiveStatusById = async (token: string, userId: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/users/${userId}/active`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
 };
 
 export const deleteUserById = async (token: string, userId: string) => {
@@ -383,7 +470,7 @@ export const deleteUserById = async (token: string, userId: string) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -396,6 +483,7 @@ export const deleteUserById = async (token: string, userId: string) => {
 };
 
 type UserUpdateForm = {
+	role: string;
 	profile_image_url: string;
 	email: string;
 	name: string;
@@ -413,6 +501,7 @@ export const updateUserById = async (token: string, userId: string, user: UserUp
 		},
 		body: JSON.stringify({
 			profile_image_url: user.profile_image_url,
+			role: user.role,
 			email: user.email,
 			name: user.name,
 			password: user.password !== '' ? user.password : undefined
@@ -423,7 +512,34 @@ export const updateUserById = async (token: string, userId: string, user: UserUp
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const getUserGroupsById = async (token: string, userId: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/users/${userId}/groups`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
 			error = err.detail;
 			return null;
 		});

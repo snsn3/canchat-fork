@@ -1,7 +1,10 @@
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Dict, Any, List
+from html import escape
 
+from markdown import markdown
 
 import site
 from fpdf import FPDF
@@ -33,19 +36,19 @@ class PDFGenerator:
         try:
             date_time = datetime.fromtimestamp(timestamp)
             return date_time.strftime("%Y-%m-%d, %H:%M:%S")
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             # Log the error if necessary
             return ""
 
     def _build_html_message(self, message: Dict[str, Any]) -> str:
         """Build HTML for a single message."""
-        role = message.get("role", "user")
-        content = message.get("content", "")
+        role = escape(message.get("role", "user"))
+        content = escape(message.get("content", ""))
         timestamp = message.get("timestamp")
 
-        model = message.get("model") if role == "assistant" else ""
+        model = escape(message.get("model") if role == "assistant" else "")
 
-        date_str = self.format_timestamp(timestamp) if timestamp else ""
+        date_str = escape(self.format_timestamp(timestamp) if timestamp else "")
 
         # extends pymdownx extension to convert markdown to html.
         # - https://facelessuser.github.io/pymdown-extensions/usage_notes/
@@ -74,6 +77,7 @@ class PDFGenerator:
 
     def _generate_html_body(self) -> str:
         """Generate the full HTML body for the PDF."""
+        escaped_title = escape(self.form_data.title)
         return f"""
         <html>
             <head>
@@ -82,7 +86,7 @@ class PDFGenerator:
             <body>
             <div>
                 <div>
-                    <h2>{self.form_data.title}</h2>
+                    <h2>{escaped_title}</h2>
                     {self.messages_html}
                 </div>
             </div>
@@ -106,7 +110,7 @@ class PDFGenerator:
             # When running using `pip install -e .` the static directory is in the site packages.
             # This path only works if `open-webui serve` is run from the root of this project.
             if not FONTS_DIR.exists():
-                FONTS_DIR = Path("./backend/static/fonts")
+                FONTS_DIR = Path(".") / "backend" / "static" / "fonts"
 
             pdf.add_font("NotoSans", "", f"{FONTS_DIR}/NotoSans-Regular.ttf")
             pdf.add_font("NotoSans", "b", f"{FONTS_DIR}/NotoSans-Bold.ttf")

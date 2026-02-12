@@ -4,12 +4,13 @@
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
-	import AddConnectionModal from './AddConnectionModal.svelte';
+	import AddConnectionModal from '$lib/components/AddConnectionModal.svelte';
+	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 
 	import Cog6 from '$lib/components/icons/Cog6.svelte';
 	import Wrench from '$lib/components/icons/Wrench.svelte';
 	import ManageOllamaModal from './ManageOllamaModal.svelte';
-	import ArrowDownTray from '$lib/components/icons/ArrowDownTray.svelte';
+	import Download from '$lib/components/icons/Download.svelte';
 
 	export let onDelete = () => {};
 	export let onSubmit = () => {};
@@ -20,6 +21,7 @@
 
 	let showManageModal = false;
 	let showConfigModal = false;
+	let showDeleteConfirmDialog = false;
 </script>
 
 <AddConnectionModal
@@ -31,11 +33,21 @@
 		key: config?.key ?? '',
 		config: config
 	}}
-	{onDelete}
+	onDelete={() => {
+		showDeleteConfirmDialog = true;
+	}}
 	onSubmit={(connection) => {
 		url = connection.url;
 		config = { ...connection.config, key: connection.key };
 		onSubmit(connection);
+	}}
+/>
+
+<ConfirmDialog
+	bind:show={showDeleteConfirmDialog}
+	on:confirm={() => {
+		onDelete();
+		showConfigModal = false;
 	}}
 />
 
@@ -56,9 +68,10 @@
 		{/if}
 
 		<input
-			class="w-full text-sm bg-transparent outline-none"
+			class="w-full text-sm bg-transparent outline-hidden"
 			placeholder={$i18n.t('Enter URL (e.g. http://localhost:11434)')}
 			bind:value={url}
+			readonly={true}
 		/>
 	</Tooltip>
 
@@ -71,7 +84,7 @@
 				}}
 				type="button"
 			>
-				<ArrowDownTray />
+				<Download />
 			</button>
 		</Tooltip>
 

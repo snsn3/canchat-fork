@@ -12,7 +12,7 @@
 	} from '$lib/constants';
 	import { WEBUI_NAME, config, user, models, settings } from '$lib/stores';
 
-	import { chatCompletion, generateOpenAIChatCompletion } from '$lib/apis/openai';
+	import { chatCompletion } from '$lib/apis/openai';
 
 	import { splitStream } from '$lib/utils';
 	import Collapsible from '../common/Collapsible.svelte';
@@ -33,6 +33,7 @@
 	let loading = false;
 	let stopResponseFlag = false;
 
+	let systemTextareaElement: HTMLTextAreaElement;
 	let messagesContainerElement: HTMLDivElement;
 
 	let showSystem = false;
@@ -55,10 +56,32 @@
 
 	const stopResponse = () => {
 		stopResponseFlag = true;
+		console.log('stopResponse');
 	};
 
+	const resizeSystemTextarea = async () => {
+		await tick();
+		if (systemTextareaElement) {
+			systemTextareaElement.style.height = '';
+			systemTextareaElement.style.height = Math.min(systemTextareaElement.scrollHeight, 555) + 'px';
+		}
+	};
+
+	$: if (showSystem) {
+		resizeSystemTextarea();
+	}
+
 	const chatCompletionHandler = async () => {
+		if (selectedModelId === '') {
+			toast.error($i18n.t('Please select a model.'));
+			return;
+		}
+
 		const model = $models.find((model) => model.id === selectedModelId);
+		if (!model) {
+			selectedModelId = '';
+			return;
+		}
 
 		const [res, controller] = await chatCompletion(
 			localStorage.token,
@@ -113,11 +136,13 @@
 
 					for (const line of lines) {
 						if (line !== '') {
+							console.log(line);
 							if (line === 'data: [DONE]') {
 								// responseMessage.done = true;
 								messages = messages;
 							} else {
 								let data = JSON.parse(line.replace(/^data: /, ''));
+								console.log(data);
 
 								if (responseMessage.content == '' && data.choices[0].delta.content == '\n') {
 									continue;
@@ -186,62 +211,26 @@
 
 <div class=" flex flex-col justify-between w-full overflow-y-auto h-full">
 	<div class="mx-auto w-full md:px-0 h-full relative">
-		<Sidebar bind:show={showSettings} className=" bg-white dark:bg-gray-900" width="300px">
-			<div class="flex flex-col px-5 py-3 text-sm">
-				<div class="flex justify-between items-center mb-2">
-					<div class=" font-medium text-base">Settings</div>
-
-					<div class=" translate-x-1.5">
-						<button
-							class="p-1.5 bg-transparent hover:bg-white/5 transition rounded-lg"
-							on:click={() => {
-								showSettings = !showSettings;
-							}}
-						>
-							<ArrowRight className="size-3" strokeWidth="2.5" />
-						</button>
-					</div>
-				</div>
-
-				<div class="mt-1">
-					<div>
-						<div class=" text-xs font-medium mb-1">Model</div>
-
-						<div class="w-full">
-							<select
-								class="w-full bg-transparent border border-gray-50 dark:border-gray-850 rounded-lg py-1 px-2 -mx-0.5 text-sm outline-none"
-								bind:value={selectedModelId}
-							>
-								{#each $models as model}
-									<option value={model.id} class="bg-gray-50 dark:bg-gray-700">{model.name}</option>
-								{/each}
-							</select>
-						</div>
-					</div>
-				</div>
-			</div>
-		</Sidebar>
-
 		<div class=" flex flex-col h-full px-3.5">
 			<div class="flex w-full items-start gap-1.5">
 				<Collapsible
 					className="w-full flex-1"
 					bind:open={showSystem}
-					buttonClassName="w-full rounded-lg text-sm border border-gray-50 dark:border-gray-850 w-full py-1 px-1.5"
+					buttonClassName="w-full rounded-lg text-sm border border-gray-100/30 dark:border-gray-850/30 w-full py-1 px-1.5"
 					grow={true}
 				>
 					<div class="flex gap-2 justify-between items-center">
-						<div class=" flex-shrink-0 font-medium ml-1.5">
+						<div class=" shrink-0 font-medium ml-1.5">
 							{$i18n.t('System Instructions')}
 						</div>
 
-						{#if !showSystem}
+						{#if !showSystem && system.trim()}
 							<div class=" flex-1 text-gray-500 line-clamp-1">
 								{system}
 							</div>
 						{/if}
 
-						<div class="flex-shrink-0">
+						<div class="shrink-0">
 							<button class="p-1.5 bg-transparent hover:bg-white/5 transition rounded-lg">
 								{#if showSystem}
 									<ChevronUp className="size-3.5" />
@@ -255,26 +244,18 @@
 					<div slot="content">
 						<div class="pt-1 px-1.5">
 							<textarea
-								id="system-textarea"
-								class="w-full h-full bg-transparent resize-none outline-none text-sm"
+								bind:this={systemTextareaElement}
+								class="w-full h-full bg-transparent resize-none outline-hidden text-sm"
 								bind:value={system}
 								placeholder={$i18n.t("You're a helpful assistant.")}
+								on:input={() => {
+									resizeSystemTextarea();
+								}}
 								rows="4"
 							/>
 						</div>
 					</div>
 				</Collapsible>
-
-				<div class="translate-y-1">
-					<button
-						class="p-1.5 bg-transparent hover:bg-white/5 transition rounded-lg"
-						on:click={() => {
-							showSettings = !showSettings;
-						}}
-					>
-						<Cog6 />
-					</button>
-				</div>
 			</div>
 
 			<div
@@ -290,16 +271,15 @@
 			</div>
 
 			<div class="pb-3">
-				<div class="text-xs font-medium text-gray-500 px-2 py-1">
-					{selectedModelId}
-				</div>
-				<div class="border border-gray-50 dark:border-gray-850 w-full px-3 py-2.5 rounded-xl">
+				<div
+					class="border border-gray-100/30 dark:border-gray-850/30 w-full px-3 py-2.5 rounded-xl"
+				>
 					<div class="py-0.5">
 						<!-- $i18n.t('a user') -->
 						<!-- $i18n.t('an assistant') -->
 						<textarea
 							bind:value={message}
-							class=" w-full h-full bg-transparent resize-none outline-none text-sm"
+							class=" w-full h-full bg-transparent resize-none outline-hidden text-sm"
 							placeholder={$i18n.t(`Enter {{role}} message here`, {
 								role: role === 'user' ? $i18n.t('a user') : $i18n.t('an assistant')
 							})}
@@ -315,10 +295,20 @@
 						/>
 					</div>
 
-					<div class="flex justify-between">
-						<div>
+					<div
+						class="flex justify-between flex-col sm:flex-row items-start sm:items-center gap-2 mt-2"
+					>
+						<div class="shrink-0">
 							<button
-								class="px-3.5 py-1.5 text-sm font-medium bg-gray-50 hover:bg-gray-100 text-gray-900 dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-gray-200 transition rounded-lg"
+								type="button"
+								class="px-3.5 py-1.5 text-sm font-medium bg-gray-50 hover:bg-gray-100 text-gray-900 dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-gray-200 transition rounded-lg shrink-0 {($settings?.highContrastMode ??
+								false)
+									? ''
+									: 'outline-hidden'}"
+								aria-pressed={role === 'assistant'}
+								aria-label={$i18n.t(
+									role === 'user' ? 'Switch to Assistant role' : 'Switch to User role'
+								)}
 								on:click={() => {
 									role = role === 'user' ? 'assistant' : 'user';
 								}}
@@ -331,37 +321,52 @@
 							</button>
 						</div>
 
-						<div>
-							{#if !loading}
-								<button
-									disabled={message === ''}
-									class="px-3.5 py-1.5 text-sm font-medium disabled:bg-gray-50 dark:disabled:hover:bg-gray-850 disabled:cursor-not-allowed bg-gray-50 hover:bg-gray-100 text-gray-900 dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-gray-200 transition rounded-lg"
-									on:click={() => {
-										addHandler();
-										role = role === 'user' ? 'assistant' : 'user';
-									}}
+						<div class="flex items-center justify-between gap-2 w-full sm:w-auto">
+							<div class="flex-1">
+								<select
+									class=" bg-transparent border border-gray-100/30 dark:border-gray-850/30 rounded-lg py-1 px-2 -mx-0.5 text-sm outline-hidden w-full"
+									bind:value={selectedModelId}
 								>
-									{$i18n.t('Add')}
-								</button>
+									{#each $models as model}
+										<option value={model.id} class="bg-gray-50 dark:bg-gray-700"
+											>{model.name}</option
+										>
+									{/each}
+								</select>
+							</div>
 
-								<button
-									class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-lg"
-									on:click={() => {
-										submitHandler();
-									}}
-								>
-									{$i18n.t('Run')}
-								</button>
-							{:else}
-								<button
-									class="px-3 py-1.5 text-sm font-medium bg-gray-300 text-black transition rounded-lg"
-									on:click={() => {
-										stopResponse();
-									}}
-								>
-									{$i18n.t('Cancel')}
-								</button>
-							{/if}
+							<div class="flex gap-2 shrink-0">
+								{#if !loading}
+									<button
+										disabled={message === ''}
+										class="px-3.5 py-1.5 text-sm font-medium disabled:bg-gray-50 dark:disabled:hover:bg-gray-850 disabled:cursor-not-allowed bg-gray-50 hover:bg-gray-100 text-gray-900 dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-gray-200 transition rounded-lg"
+										on:click={() => {
+											addHandler();
+											role = role === 'user' ? 'assistant' : 'user';
+										}}
+									>
+										{$i18n.t('Add')}
+									</button>
+
+									<button
+										class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-lg"
+										on:click={() => {
+											submitHandler();
+										}}
+									>
+										{$i18n.t('Run')}
+									</button>
+								{:else}
+									<button
+										class="px-3 py-1.5 text-sm font-medium bg-gray-300 text-black transition rounded-lg"
+										on:click={() => {
+											stopResponse();
+										}}
+									>
+										{$i18n.t('Cancel')}
+									</button>
+								{/if}
+							</div>
 						</div>
 					</div>
 				</div>

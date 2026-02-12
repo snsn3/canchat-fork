@@ -1,4 +1,4 @@
-import { WEBUI_API_BASE_URL } from '$lib/constants';
+import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 import type { Banner } from '$lib/types';
 
 export const importConfig = async (token: string, config) => {
@@ -19,7 +19,7 @@ export const importConfig = async (token: string, config) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -46,7 +46,254 @@ export const exportConfig = async (token: string) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const getConnectionsConfig = async (token: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/connections`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const setConnectionsConfig = async (token: string, config: object) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/connections`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			...config
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const getToolServerConnections = async (token: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/tool_servers`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const setToolServerConnections = async (token: string, connections: object) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/tool_servers`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			...connections
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const verifyToolServerConnection = async (token: string, connection: object) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/tool_servers/verify`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			...connection
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+type RegisterOAuthClientForm = {
+	url: string;
+	client_id: string;
+	client_name?: string;
+};
+
+export const registerOAuthClient = async (
+	token: string,
+	formData: RegisterOAuthClientForm,
+	type: null | string = null
+) => {
+	let error = null;
+
+	const searchParams = type ? `?type=${type}` : '';
+	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/oauth/clients/register${searchParams}`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			...formData
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const getOAuthClientAuthorizationUrl = (clientId: string, type: null | string = null) => {
+	const oauthClientId = type ? `${type}:${clientId}` : clientId;
+	return `${WEBUI_BASE_URL}/oauth/clients/${oauthClientId}/authorize`;
+};
+
+export const getCodeExecutionConfig = async (token: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/code_execution`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const setCodeExecutionConfig = async (token: string, config: object) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/code_execution`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			...config
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -73,7 +320,7 @@ export const getModelsConfig = async (token: string) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -103,7 +350,7 @@ export const setModelsConfig = async (token: string, config: object) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -133,7 +380,7 @@ export const setDefaultPromptSuggestions = async (token: string, promptSuggestio
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -160,7 +407,7 @@ export const getBanners = async (token: string): Promise<Banner[]> => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});
@@ -190,212 +437,7 @@ export const setBanners = async (token: string, banners: Banner[]) => {
 			return res.json();
 		})
 		.catch((err) => {
-			console.log(err);
-			error = err.detail;
-			return null;
-		});
-
-	if (error) {
-		throw error;
-	}
-
-	return res;
-};
-
-// Chat Lifetime Configuration
-export interface ChatLifetimeConfig {
-	enabled: boolean;
-	days: number;
-	preserve_pinned: boolean;
-	preserve_archived: boolean;
-}
-
-export const getChatLifetimeConfig = async (token: string): Promise<ChatLifetimeConfig> => {
-	let error = null;
-
-	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/chat-lifetime`, {
-		method: 'GET',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${token}`
-		}
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.catch((err) => {
-			console.log(err);
-			error = err.detail;
-			return null;
-		});
-
-	if (error) {
-		throw error;
-	}
-
-	return res;
-};
-
-export const updateChatLifetimeConfig = async (
-	token: string,
-	config: ChatLifetimeConfig
-): Promise<ChatLifetimeConfig> => {
-	let error = null;
-
-	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/chat-lifetime`, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${token}`
-		},
-		body: JSON.stringify(config)
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.catch((err) => {
-			console.log(err);
-			error = err.detail;
-			return null;
-		});
-
-	if (error) {
-		throw error;
-	}
-
-	return res;
-};
-
-// Cleanup Operations
-export const triggerChatCleanup = async (
-	token: string,
-	options?: {
-		max_age_days?: number;
-		preserve_pinned?: boolean;
-		preserve_archived?: boolean;
-	}
-) => {
-	let error = null;
-
-	const queryParams = new URLSearchParams();
-	if (options?.max_age_days !== undefined) {
-		queryParams.append('max_age_days', options.max_age_days.toString());
-	}
-	if (options?.preserve_pinned !== undefined) {
-		queryParams.append('preserve_pinned', options.preserve_pinned.toString());
-	}
-	if (options?.preserve_archived !== undefined) {
-		queryParams.append('preserve_archived', options.preserve_archived.toString());
-	}
-
-	const url = `${WEBUI_API_BASE_URL}/retrieval/maintenance/cleanup/expired-chats${
-		queryParams.toString() ? `?${queryParams.toString()}` : ''
-	}`;
-
-	const res = await fetch(url, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${token}`
-		}
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.catch((err) => {
-			console.log(err);
-			error = err.detail;
-			return null;
-		});
-
-	if (error) {
-		throw error;
-	}
-
-	return res;
-};
-
-export const triggerComprehensiveCleanup = async (
-	token: string,
-	options?: {
-		max_age_days?: number;
-		include_chat_cleanup?: boolean;
-		preserve_pinned?: boolean;
-		preserve_archived?: boolean;
-	}
-) => {
-	let error = null;
-
-	const queryParams = new URLSearchParams();
-	if (options?.max_age_days !== undefined) {
-		queryParams.append('max_age_days', options.max_age_days.toString());
-	}
-	if (options?.include_chat_cleanup !== undefined) {
-		queryParams.append('include_chat_cleanup', options.include_chat_cleanup.toString());
-	}
-	if (options?.preserve_pinned !== undefined) {
-		queryParams.append('preserve_pinned', options.preserve_pinned.toString());
-	}
-	if (options?.preserve_archived !== undefined) {
-		queryParams.append('preserve_archived', options.preserve_archived.toString());
-	}
-
-	const url = `${WEBUI_API_BASE_URL}/retrieval/maintenance/cleanup/comprehensive${
-		queryParams.toString() ? `?${queryParams.toString()}` : ''
-	}`;
-
-	const res = await fetch(url, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${token}`
-		}
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.catch((err) => {
-			console.log(err);
-			error = err.detail;
-			return null;
-		});
-
-	if (error) {
-		throw error;
-	}
-
-	return res;
-};
-
-export interface ChatLifetimeScheduleInfo {
-	enabled: boolean;
-	status: string;
-	next_run: string | null;
-	lifetime_days: number;
-	schedule?: string;
-	error?: string;
-}
-
-export const getChatLifetimeSchedule = async (token: string): Promise<ChatLifetimeScheduleInfo> => {
-	let error = null;
-
-	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/chat-lifetime/schedule`, {
-		method: 'GET',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${token}`
-		}
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.catch((err) => {
-			console.log(err);
+			console.error(err);
 			error = err.detail;
 			return null;
 		});

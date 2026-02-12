@@ -3,51 +3,75 @@
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
 
-	import { onMount, getContext } from 'svelte';
+	import { onMount, getContext, tick } from 'svelte';
 	const i18n = getContext('i18n');
 
-	import { models as _models, user } from '$lib/stores';
+	import { WEBUI_NAME, config, mobile, models as _models, settings, user } from '$lib/stores';
 	import {
 		createNewModel,
+		deleteAllModels,
 		getBaseModels,
 		toggleModelById,
-		updateModelById
+		updateModelById,
+		importModels
 	} from '$lib/apis/models';
+	import { copyToClipboard } from '$lib/utils';
+	import { page } from '$app/stores';
+	import { updateUserSettings } from '$lib/apis/users';
 
 	import { getModels } from '$lib/apis';
 	import Search from '$lib/components/icons/Search.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import XMark from '$lib/components/icons/XMark.svelte';
 
 	import ModelEditor from '$lib/components/workspace/Models/ModelEditor.svelte';
 	import { toast } from 'svelte-sonner';
+	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import Cog6 from '$lib/components/icons/Cog6.svelte';
 	import ConfigureModelsModal from './Models/ConfigureModelsModal.svelte';
-	import ArrowDownTray from '$lib/components/icons/ArrowDownTray.svelte';
+	import Wrench from '$lib/components/icons/Wrench.svelte';
+	import Download from '$lib/components/icons/Download.svelte';
 	import ManageModelsModal from './Models/ManageModelsModal.svelte';
+	import ModelMenu from '$lib/components/admin/Settings/Models/ModelMenu.svelte';
+	import EllipsisHorizontal from '$lib/components/icons/EllipsisHorizontal.svelte';
+	import EyeSlash from '$lib/components/icons/EyeSlash.svelte';
+	import Eye from '$lib/components/icons/Eye.svelte';
+	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+	import { goto } from '$app/navigation';
 
+	let shiftKey = false;
+
+	let modelsImportInProgress = false;
 	let importFiles;
 	let modelsImportInputElement: HTMLInputElement;
 
 	let models = null;
+
 	let workspaceModels = null;
 	let baseModels = null;
+
 	let filteredModels = [];
 	let selectedModelId = null;
+
 	let showConfigModal = false;
 	let showManageModal = false;
-	let searchValue = '';
 
-	$: filteredModels = models
-		?.filter((m) => searchValue === '' || m.name.toLowerCase().includes(searchValue.toLowerCase()))
-		.map((model) => ({
-			...model,
-			description: ($i18n.language === 'fr-CA'
-				? model?.meta?.description_fr || ''
-				: model?.meta?.description || ''
-			).trim()
-		}));
+	$: if (models) {
+		filteredModels = models
+			.filter((m) => searchValue === '' || m.name.toLowerCase().includes(searchValue.toLowerCase()))
+			.sort((a, b) => {
+				// // Check if either model is inactive and push them to the bottom
+				// if ((a.is_active ?? true) !== (b.is_active ?? true)) {
+				// 	return (b.is_active ?? true) - (a.is_active ?? true);
+				// }
+				// If both models' active states are the same, sort alphabetically
+				return (a?.name ?? a?.id ?? '').localeCompare(b?.name ?? b?.id ?? '');
+			});
+	}
+
+	let searchValue = '';
 
 	const downloadModels = async (models) => {
 		let blob = new Blob([JSON.stringify(models)], {
@@ -57,49 +81,67 @@
 	};
 
 	const init = async () => {
+		models = null;
+
 		workspaceModels = await getBaseModels(localStorage.token);
-		baseModels = await getModels(localStorage.token, true);
+		baseModels = await getModels(localStorage.token, null, true);
 
-		models = baseModels
-			.map((m) => {
-				const workspaceModel = workspaceModels.find((wm) => wm.id === m.id);
+		models = baseModels.map((m) => {
+			const workspaceModel = workspaceModels.find((wm) => wm.id === m.id);
 
-				if (workspaceModel) {
-					return {
-						...m,
-						...workspaceModel
-					};
-				} else {
-					return {
-						...m,
-						id: m.id,
-						name: m.name,
-						is_active: true
-					};
-				}
-			})
-			.sort((a, b) => a.name.localeCompare(b.name));
+			if (workspaceModel) {
+				return {
+					...m,
+					...workspaceModel
+				};
+			} else {
+				return {
+					...m,
+					id: m.id,
+					name: m.name,
+
+					is_active: true
+				};
+			}
+		});
 	};
 
 	const upsertModelHandler = async (model) => {
 		model.base_model_id = null;
 
 		if (workspaceModels.find((m) => m.id === model.id)) {
-			const res = await updateModelById(localStorage.token, model.id, model).catch(() => null);
+			const res = await updateModelById(localStorage.token, model.id, model).catch((error) => {
+				return null;
+			});
 
 			if (res) {
 				toast.success($i18n.t('Model updated successfully'));
 			}
 		} else {
-			const res = await createNewModel(localStorage.token, model).catch(() => null);
+			const res = await createNewModel(localStorage.token, {
+				meta: {},
+				id: model.id,
+				name: model.name,
+				base_model_id: null,
+				params: {},
+				access_control: {},
+				...model
+			}).catch((error) => {
+				return null;
+			});
 
 			if (res) {
 				toast.success($i18n.t('Model updated successfully'));
 			}
 		}
-
-		_models.set(await getModels(localStorage.token));
 		await init();
+
+		_models.set(
+			await getModels(
+				localStorage.token,
+				$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
+			)
+		);
 	};
 
 	const toggleModelHandler = async (model) => {
@@ -112,16 +154,117 @@
 				params: {},
 				access_control: {},
 				is_active: model.is_active
-			}).catch(() => null);
+			}).catch((error) => {
+				return null;
+			});
 		} else {
 			await toggleModelById(localStorage.token, model.id);
 		}
 
-		_models.set(await getModels(localStorage.token));
+		// await init();
+		_models.set(
+			await getModels(
+				localStorage.token,
+				$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
+			)
+		);
+	};
+
+	const hideModelHandler = async (model) => {
+		model.meta = {
+			...model.meta,
+			hidden: !(model?.meta?.hidden ?? false)
+		};
+
+		console.debug(model);
+
+		toast.success(
+			model.meta.hidden
+				? $i18n.t(`Model {{name}} is now hidden`, {
+						name: model.id
+					})
+				: $i18n.t(`Model {{name}} is now visible`, {
+						name: model.id
+					})
+		);
+
+		upsertModelHandler(model);
+	};
+
+	const copyLinkHandler = async (model) => {
+		const baseUrl = window.location.origin;
+		const res = await copyToClipboard(`${baseUrl}/?model=${encodeURIComponent(model.id)}`);
+
+		if (res) {
+			toast.success($i18n.t('Copied link to clipboard'));
+		} else {
+			toast.error($i18n.t('Failed to copy link'));
+		}
+	};
+
+	const cloneHandler = async (model) => {
+		sessionStorage.model = JSON.stringify({
+			...model,
+			base_model_id: model.id,
+			id: `${model.id}-clone`,
+			name: `${model.name} (Clone)`
+		});
+		goto('/workspace/models/create');
+	};
+
+	const exportModelHandler = async (model) => {
+		let blob = new Blob([JSON.stringify([model])], {
+			type: 'application/json'
+		});
+		saveAs(blob, `${model.id}-${Date.now()}.json`);
+	};
+
+	const pinModelHandler = async (modelId) => {
+		let pinnedModels = $settings?.pinnedModels ?? [];
+
+		if (pinnedModels.includes(modelId)) {
+			pinnedModels = pinnedModels.filter((id) => id !== modelId);
+		} else {
+			pinnedModels = [...new Set([...pinnedModels, modelId])];
+		}
+
+		settings.set({ ...$settings, pinnedModels: pinnedModels });
+		await updateUserSettings(localStorage.token, { ui: $settings });
 	};
 
 	onMount(async () => {
-		init();
+		await init();
+		const id = $page.url.searchParams.get('id');
+
+		if (id) {
+			selectedModelId = id;
+		}
+
+		const onKeyDown = (event) => {
+			if (event.key === 'Shift') {
+				shiftKey = true;
+			}
+		};
+
+		const onKeyUp = (event) => {
+			if (event.key === 'Shift') {
+				shiftKey = false;
+			}
+		};
+
+		const onBlur = () => {
+			shiftKey = false;
+		};
+
+		window.addEventListener('keydown', onKeyDown);
+		window.addEventListener('keyup', onKeyUp);
+		window.addEventListener('blur-sm', onBlur);
+
+		return () => {
+			window.removeEventListener('keydown', onKeyDown);
+			window.removeEventListener('keyup', onKeyUp);
+			window.removeEventListener('blur-sm', onBlur);
+		};
 	});
 </script>
 
@@ -132,9 +275,8 @@
 	{#if selectedModelId === null}
 		<div class="flex flex-col gap-1 mt-1.5 mb-2">
 			<div class="flex justify-between items-center">
-				<div class="flex items-center md:self-center text-xl font-medium px-0.5">
+				<div class="flex items-center md:self-center text-xl font-medium px-0.5 gap-2">
 					{$i18n.t('Models')}
-					<div class="flex self-center w-[1px] h-6 mx-2.5 bg-gray-50 dark:bg-gray-850" />
 					<span class="text-lg font-medium text-gray-500 dark:text-gray-300"
 						>{filteredModels.length}</span
 					>
@@ -144,20 +286,18 @@
 					<Tooltip content={$i18n.t('Manage Models')}>
 						<button
 							class=" p-1 rounded-full flex gap-1 items-center"
-							id="manage-models"
 							type="button"
 							on:click={() => {
 								showManageModal = true;
 							}}
 						>
-							<ArrowDownTray />
+							<Download />
 						</button>
 					</Tooltip>
 
 					<Tooltip content={$i18n.t('Settings')}>
 						<button
 							class=" p-1 rounded-full flex gap-1 items-center"
-							id="config-models"
 							type="button"
 							on:click={() => {
 								showConfigModal = true;
@@ -175,19 +315,34 @@
 						<Search className="size-3.5" />
 					</div>
 					<input
-						class=" w-full text-sm py-1 rounded-r-xl outline-none bg-transparent"
+						class=" w-full text-sm py-1 rounded-r-xl outline-hidden bg-transparent"
 						bind:value={searchValue}
 						placeholder={$i18n.t('Search Models')}
 					/>
+					{#if searchValue}
+						<div class="self-center pl-1.5 translate-y-[0.5px] rounded-l-xl bg-transparent">
+							<button
+								class="p-0.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+								on:click={() => {
+									searchValue = '';
+								}}
+							>
+								<XMark className="size-3" strokeWidth="2" />
+							</button>
+						</div>
+					{/if}
 				</div>
 			</div>
 		</div>
 
 		<div class=" my-2 mb-5" id="model-list">
 			{#if models.length > 0}
-				{#each filteredModels as model, modelIdx (model.id)}
+				{#each filteredModels as model, modelIdx (`${model.id}-${modelIdx}`)}
 					<div
-						class=" flex space-x-4 cursor-pointer w-full px-3 py-2 dark:hover:bg-white/5 hover:bg-black/5 rounded-lg transition"
+						class=" flex space-x-4 cursor-pointer w-full px-3 py-2 dark:hover:bg-white/5 hover:bg-black/5 rounded-lg transition {model
+							?.meta?.hidden
+							? 'opacity-50 dark:opacity-50'
+							: ''}"
 						id="model-item-{model.id}"
 					>
 						<button
@@ -204,7 +359,7 @@
 										: 'opacity-50 dark:opacity-50'} "
 								>
 									<img
-										src={model?.meta?.profile_image_url ?? '/static/favicon.png'}
+										src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model.id}`}
 										alt="modelfile profile"
 										class=" rounded-full w-full h-auto object-cover"
 									/>
@@ -213,53 +368,111 @@
 
 							<div class=" flex-1 self-center {(model?.is_active ?? true) ? '' : 'text-gray-500'}">
 								<Tooltip
-									content={marked.parse(model.description)}
+									content={marked.parse(
+										!!model?.meta?.description
+											? model?.meta?.description
+											: model?.ollama?.digest
+												? `${model?.ollama?.digest} **(${model?.ollama?.modified_at})**`
+												: model.id
+									)}
 									className=" w-fit"
 									placement="top-start"
 								>
 									<div class="  font-semibold line-clamp-1">{model.name}</div>
 								</Tooltip>
 								<div class=" text-xs overflow-hidden text-ellipsis line-clamp-1 text-gray-500">
-									<span class="line-clamp-1">{model.description}</span>
+									<span class=" line-clamp-1">
+										{!!model?.meta?.description
+											? model?.meta?.description
+											: model?.ollama?.digest
+												? `${model.id} (${model?.ollama?.digest})`
+												: model.id}
+									</span>
 								</div>
 							</div>
 						</button>
 						<div class="flex flex-row gap-0.5 items-center self-center">
-							<button
-								class="self-center w-fit text-sm px-2 py-2 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
-								type="button"
-								on:click={() => {
-									selectedModelId = model.id;
-								}}
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke-width="1.5"
-									stroke="currentColor"
-									class="w-4 h-4"
-								>
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Zm0 0L19.5 7.125"
-									/>
-								</svg>
-							</button>
-
-							<div class="ml-1">
-								<Tooltip
-									content={(model?.is_active ?? true) ? $i18n.t('Enabled') : $i18n.t('Disabled')}
-								>
-									<Switch
-										bind:state={model.is_active}
-										on:change={async () => {
-											toggleModelHandler(model);
+							{#if shiftKey}
+								<Tooltip content={model?.meta?.hidden ? $i18n.t('Show') : $i18n.t('Hide')}>
+									<button
+										class="self-center w-fit text-sm px-2 py-2 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
+										type="button"
+										on:click={() => {
+											hideModelHandler(model);
 										}}
-									/>
+									>
+										{#if model?.meta?.hidden}
+											<EyeSlash />
+										{:else}
+											<Eye />
+										{/if}
+									</button>
 								</Tooltip>
-							</div>
+							{:else}
+								<button
+									class="self-center w-fit text-sm px-2 py-2 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
+									type="button"
+									on:click={() => {
+										selectedModelId = model.id;
+									}}
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke-width="1.5"
+										stroke="currentColor"
+										class="w-4 h-4"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Zm0 0L19.5 7.125"
+										/>
+									</svg>
+								</button>
+
+								<ModelMenu
+									user={$user}
+									{model}
+									exportHandler={() => {
+										exportModelHandler(model);
+									}}
+									hideHandler={() => {
+										hideModelHandler(model);
+									}}
+									pinModelHandler={() => {
+										pinModelHandler(model.id);
+									}}
+									copyLinkHandler={() => {
+										copyLinkHandler(model);
+									}}
+									cloneHandler={() => {
+										cloneHandler(model);
+									}}
+									onClose={() => {}}
+								>
+									<button
+										class="self-center w-fit text-sm p-1.5 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
+										type="button"
+									>
+										<EllipsisHorizontal className="size-5" />
+									</button>
+								</ModelMenu>
+
+								<div class="ml-1">
+									<Tooltip
+										content={(model?.is_active ?? true) ? $i18n.t('Enabled') : $i18n.t('Disabled')}
+									>
+										<Switch
+											bind:state={model.is_active}
+											on:change={async () => {
+												toggleModelHandler(model);
+											}}
+										/>
+									</Tooltip>
+								</div>
+							{/if}
 						</div>
 					</div>
 				{/each}
@@ -283,38 +496,43 @@
 						accept=".json"
 						hidden
 						on:change={() => {
-							let reader = new FileReader();
-							reader.onload = async (event) => {
-								let savedModels = JSON.parse(event.target.result);
+							if (importFiles.length > 0) {
+								const reader = new FileReader();
+								reader.onload = async (event) => {
+									modelsImportInProgress = true;
 
-								for (const model of savedModels) {
-									if (Object.keys(model).includes('base_model_id')) {
-										if (model.base_model_id === null) {
-											upsertModelHandler(model);
+									try {
+										const models = JSON.parse(String(event.target.result));
+										const res = await importModels(localStorage.token, models);
+
+										if (res) {
+											toast.success($i18n.t('Models imported successfully'));
+											await init();
+										} else {
+											toast.error($i18n.t('Failed to import models'));
 										}
-									} else {
-										if (model?.info ?? false) {
-											if (model.info.base_model_id === null) {
-												upsertModelHandler(model.info);
-											}
-										}
+									} catch (e) {
+										toast.error(e?.detail ?? $i18n.t('Invalid JSON file'));
+										console.error(e);
 									}
-								}
 
-								await _models.set(await getModels(localStorage.token));
-								init();
-							};
-
-							reader.readAsText(importFiles[0]);
+									modelsImportInProgress = false;
+								};
+								reader.readAsText(importFiles[0]);
+							}
 						}}
 					/>
 
 					<button
 						class="flex text-xs items-center space-x-1 px-3 py-1.5 rounded-xl bg-gray-50 hover:bg-gray-100 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-200 transition"
+						disabled={modelsImportInProgress}
 						on:click={() => {
 							modelsImportInputElement.click();
 						}}
 					>
+						{#if modelsImportInProgress}
+							<Spinner className="size-3" />
+						{/if}
 						<div class=" self-center mr-2 font-medium line-clamp-1">
 							{$i18n.t('Import Presets')}
 						</div>
@@ -342,7 +560,7 @@
 						}}
 					>
 						<div class=" self-center mr-2 font-medium line-clamp-1">
-							{$i18n.t('Export Presets')}
+							{$i18n.t('Export Presets')} ({models.length})
 						</div>
 
 						<div class=" self-center">
@@ -369,6 +587,7 @@
 			model={models.find((m) => m.id === selectedModelId)}
 			preset={false}
 			onSubmit={(model) => {
+				console.log(model);
 				upsertModelHandler(model);
 				selectedModelId = null;
 			}}
@@ -379,6 +598,6 @@
 	{/if}
 {:else}
 	<div class=" h-full w-full flex justify-center items-center">
-		<Spinner />
+		<Spinner className="size-5" />
 	</div>
 {/if}

@@ -6,11 +6,10 @@
 
 	import { WEBUI_BASE_URL } from '$lib/constants';
 	import { WEBUI_NAME, config, user, models, settings, showSidebar } from '$lib/stores';
-	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
+	import { chatCompletion } from '$lib/apis/openai';
 
 	import { splitStream } from '$lib/utils';
 	import Selector from '$lib/components/chat/ModelSelector/Selector.svelte';
-	import MenuLines from '../icons/MenuLines.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -34,12 +33,13 @@
 
 	const stopResponse = () => {
 		stopResponseFlag = true;
+		console.log('stopResponse');
 	};
 
 	const textCompletionHandler = async () => {
 		const model = $models.find((model) => model.id === selectedModelId);
 
-		const [res, controller] = await generateOpenAIChatCompletion(
+		const [res, controller] = await chatCompletion(
 			localStorage.token,
 			{
 				model: model.id,
@@ -78,6 +78,8 @@
 								console.log('done');
 							} else {
 								let data = JSON.parse(line.replace(/^data: /, ''));
+								console.log(data);
+
 								text += data.choices[0].delta.content ?? '';
 							}
 						}
@@ -149,7 +151,7 @@
 						<textarea
 							id="text-completion-textarea"
 							bind:this={textCompletionAreaElement}
-							class="w-full h-full p-3 bg-transparent border border-gray-50 dark:border-gray-850 outline-none resize-none rounded-lg text-sm"
+							class="w-full h-full p-3 bg-transparent border border-gray-100/30 dark:border-gray-850/30 outline-hidden resize-none rounded-lg text-sm"
 							bind:value={text}
 							placeholder={$i18n.t("You're a helpful assistant.")}
 						/>

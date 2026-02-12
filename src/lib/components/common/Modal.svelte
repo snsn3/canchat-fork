@@ -1,38 +1,47 @@
 <script lang="ts">
-	import { onDestroy, onMount, getContext } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
+
 	import { flyAndScale } from '$lib/utils/transitions';
-	import * as focusTrap from 'focus-trap';
-	import { ariaMessage } from '$lib/stores';
-
-	const i18n = getContext('i18n');
-
+	import * as FocusTrap from 'focus-trap';
 	export let show = true;
 	export let size = 'md';
 	export let containerClassName = 'p-3';
-	export let className = 'bg-gray-50 dark:bg-gray-900 rounded-2xl';
-	export let disableClose = false;
-	export let title = '';
+	export let className = 'bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm rounded-4xl';
 
-	// New props for custom focus behavior:
-	export let initialFocusSelector = ''; // e.g. '#first-input'
-	export let returnFocusSelector = ''; // e.g. '#open-button'
-
-	let modalElement: HTMLElement;
-	let contentEl: HTMLElement;
+	let modalElement = null;
 	let mounted = false;
-	let trap: any = null;
+	// Create focus trap to trap user tabs inside modal
+	// https://www.w3.org/WAI/WCAG21/Understanding/focus-order.html
+	// https://www.w3.org/WAI/WCAG21/Understanding/keyboard.html
+	let focusTrap: FocusTrap.FocusTrap | null = null;
 
-	const sizeToWidth = (size: string) => {
-		if (size === 'full') return 'w-full';
-		if (size === 'xs') return 'w-[16rem]';
-		if (size === 'sm') return 'w-[30rem]';
-		if (size === 'md') return 'w-[42rem]';
-		return 'w-[56rem]';
+	const sizeToWidth = (size) => {
+		if (size === 'full') {
+			return 'w-full';
+		}
+		if (size === 'xs') {
+			return 'w-[16rem]';
+		} else if (size === 'sm') {
+			return 'w-[30rem]';
+		} else if (size === 'md') {
+			return 'w-[42rem]';
+		} else if (size === 'lg') {
+			return 'w-[56rem]';
+		} else if (size === 'xl') {
+			return 'w-[70rem]';
+		} else if (size === '2xl') {
+			return 'w-[84rem]';
+		} else if (size === '3xl') {
+			return 'w-[100rem]';
+		} else {
+			return 'w-[56rem]';
+		}
 	};
 
 	const handleKeyDown = (event: KeyboardEvent) => {
-		if (event.key === 'Escape' && isTopModal() && !disableClose) {
+		if (event.key === 'Escape' && isTopModal()) {
+			console.log('Escape');
 			show = false;
 		}
 	};
@@ -48,70 +57,54 @@
 
 	$: if (show && modalElement) {
 		document.body.appendChild(modalElement);
+		focusTrap = FocusTrap.createFocusTrap(modalElement, {
+			allowOutsideClick: (e) => {
+				return (
+					e.target.closest('[data-sonner-toast]') !== null ||
+					e.target.closest('.modal-content') === null
+				);
+			}
+		});
+		focusTrap.activate();
 		window.addEventListener('keydown', handleKeyDown);
 		document.body.style.overflow = 'hidden';
-		ariaMessage.set($i18n.t('modalOpened', { title: title }));
 	} else if (modalElement) {
+		focusTrap.deactivate();
 		window.removeEventListener('keydown', handleKeyDown);
 		document.body.removeChild(modalElement);
 		document.body.style.overflow = 'unset';
-		ariaMessage.set($i18n.t('modalClosed', { title: title }));
-	}
-
-	// Set up the focus trap using custom selectors if provided.
-	$: if (show && contentEl && !trap) {
-		const config: any = {
-			clickOutsideDeactivates: true,
-			// This makes the trap record the active element automatically
-			returnFocusOnDeactivate: true,
-			// Use the provided initial focus selector if available
-			initialFocus: initialFocusSelector
-				? () => contentEl.querySelector(initialFocusSelector)
-				: undefined,
-			// Override onDeactivate if a custom return focus selector is provided:
-			onDeactivate: () => {
-				if (returnFocusSelector) {
-					const returnEl = document.querySelector(returnFocusSelector);
-					if (returnEl) {
-						returnEl.focus();
-						return;
-					}
-				}
-			}
-		};
-		trap = focusTrap.createFocusTrap(contentEl, config);
-		trap.activate();
-	} else if (!show && trap) {
-		trap.deactivate();
-		trap = null;
 	}
 
 	onDestroy(() => {
 		show = false;
-		if (trap) {
-			trap.deactivate();
-			trap = null;
+		if (focusTrap) {
+			focusTrap.deactivate();
 		}
-		if (modalElement && document.body.contains(modalElement)) {
+		if (modalElement) {
 			document.body.removeChild(modalElement);
 		}
 	});
 </script>
 
 {#if show}
+	<!-- svelte-ignore a11y-click-events-have-key-events -->
+	<!-- svelte-ignore a11y-no-static-element-interactions -->
+	<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
 	<div
 		bind:this={modalElement}
-		class="modal fixed top-0 right-0 left-0 bottom-0 bg-black/60 w-full h-screen max-h-[100dvh] {containerClassName} flex justify-center z-[9999] overflow-y-auto overscroll-contain"
+		aria-modal="true"
+		role="dialog"
+		class="modal fixed top-0 right-0 left-0 bottom-0 bg-black/30 dark:bg-black/60 w-full h-screen max-h-[100dvh] {containerClassName}  flex justify-center z-9999 overflow-y-auto overscroll-contain"
+		style="scrollbar-gutter: stable;"
 		in:fade={{ duration: 10 }}
 		on:mousedown={() => {
-			if (!disableClose) show = false;
+			show = false;
 		}}
 	>
 		<div
-			bind:this={contentEl}
-			class=" m-auto max-w-full {sizeToWidth(size)} {size !== 'full'
+			class="m-auto max-w-full {sizeToWidth(size)} {size !== 'full'
 				? 'mx-2'
-				: ''} shadow-3xl min-h-fit scrollbar-hidden {className}"
+				: ''} shadow-3xl min-h-fit scrollbar-hidden {className} border border-white dark:border-gray-850"
 			in:flyAndScale
 			on:mousedown={(e) => {
 				e.stopPropagation();
@@ -121,3 +114,20 @@
 		</div>
 	</div>
 {/if}
+
+<style>
+	.modal-content {
+		animation: scaleUp 0.1s ease-out forwards;
+	}
+
+	@keyframes scaleUp {
+		from {
+			transform: scale(0.985);
+			opacity: 0;
+		}
+		to {
+			transform: scale(1);
+			opacity: 1;
+		}
+	}
+</style>

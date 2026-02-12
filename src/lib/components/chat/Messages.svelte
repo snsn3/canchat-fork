@@ -7,14 +7,14 @@
 		user as _user,
 		mobile,
 		currentChatPage,
-		ariaMessage
+		temporaryChatEnabled
 	} from '$lib/stores';
 	import { tick, getContext, onMount, createEventDispatcher } from 'svelte';
 	const dispatch = createEventDispatcher();
 
 	import { toast } from 'svelte-sonner';
 	import { getChatList, updateChatById } from '$lib/apis/chats';
-	import { copyToClipboard, findWordIndices } from '$lib/utils';
+	import { copyToClipboard, extractCurlyBraceWords } from '$lib/utils';
 
 	import Message from './Messages/Message.svelte';
 	import Loader from '../common/Loader.svelte';
@@ -32,11 +32,13 @@
 	export let prompt;
 	export let history = {};
 	export let selectedModels;
-	export let selectedToolIds: string[] = [];
+	export let atSelectedModel;
 
 	let messages = [];
 
-	export let sendPrompt: Function;
+	export let setInputText: Function = () => {};
+
+	export let sendMessage: Function;
 	export let continueResponse: Function;
 	export let regenerateResponse: Function;
 	export let mergeResponses: Function;
@@ -47,11 +49,15 @@
 	export let addMessages: Function = () => {};
 
 	export let readOnly = false;
+	export let editCodeBlock = true;
 
+	export let topPadding = false;
 	export let bottomPadding = false;
 	export let autoScroll;
 
-	let messagesCount = 20;
+	export let onSelect = (e) => {};
+
+	export let messagesCount: number | null = 20;
 	let messagesLoading = false;
 
 	const loadMoreMessages = async () => {
@@ -71,7 +77,15 @@
 		let _messages = [];
 
 		let message = history.messages[history.currentId];
-		while (message && _messages.length <= messagesCount) {
+		const visitedMessageIds = new Set();
+
+		while (message && (messagesCount !== null ? _messages.length <= messagesCount : true)) {
+			if (visitedMessageIds.has(message.id)) {
+				console.warn('Circular dependency detected in message history', message.id);
+				break;
+			}
+			visitedMessageIds.add(message.id);
+
 			_messages.unshift({ ...message });
 			message = message.parentId !== null ? history.messages[message.parentId] : null;
 		}
@@ -94,15 +108,58 @@
 	};
 
 	const updateChat = async () => {
-		history = history;
-		await tick();
-		await updateChatById(localStorage.token, chatId, {
-			history: history,
-			messages: messages
-		});
+		if (!$temporaryChatEnabled) {
+			history = history;
+			await tick();
+			await updateChatById(localStorage.token, chatId, {
+				history: history,
+				messages: messages
+			});
 
-		currentChatPage.set(1);
-		await chats.set(await getChatList(localStorage.token, $currentChatPage));
+			currentChatPage.set(1);
+			await chats.set(await getChatList(localStorage.token, $currentChatPage));
+		}
+	};
+
+	const gotoMessage = async (message, idx) => {
+		// Determine the correct sibling list (either parent's children or root messages)
+		let siblings;
+		if (message.parentId !== null) {
+			siblings = history.messages[message.parentId].childrenIds;
+		} else {
+			siblings = Object.values(history.messages)
+				.filter((msg) => msg.parentId === null)
+				.map((msg) => msg.id);
+		}
+
+		// Clamp index to a valid range
+		idx = Math.max(0, Math.min(idx, siblings.length - 1));
+
+		let messageId = siblings[idx];
+
+		// If we're navigating to a different message
+		if (message.id !== messageId) {
+			// Drill down to the deepest child of that branch
+			let messageChildrenIds = history.messages[messageId].childrenIds;
+			while (messageChildrenIds.length !== 0) {
+				messageId = messageChildrenIds.at(-1);
+				messageChildrenIds = history.messages[messageId].childrenIds;
+			}
+
+			history.currentId = messageId;
+		}
+
+		await tick();
+
+		// Optional auto-scroll
+		if ($settings?.scrollOnBranchChange ?? true) {
+			const element = document.getElementById('messages-container');
+			autoScroll = element.scrollHeight - element.scrollTop <= element.clientHeight + 50;
+
+			setTimeout(() => {
+				scrollToBottom();
+			}, 100);
+		}
 	};
 
 	const showPreviousMessage = async (message) => {
@@ -150,7 +207,6 @@
 				scrollToBottom();
 			}, 100);
 		}
-		ariaMessage.set($i18n.t('Navigating to previous response'));
 	};
 
 	const showNextMessage = async (message) => {
@@ -202,7 +258,6 @@
 				scrollToBottom();
 			}, 100);
 		}
-		ariaMessage.set($i18n.t('Navigating to next response'));
 	};
 
 	const rateMessage = async (messageId, rating) => {
@@ -214,7 +269,11 @@
 		await updateChat();
 	};
 
-	const editMessage = async (messageId, content, submit = true) => {
+	const editMessage = async (messageId, { content, files }, submit = true) => {
+		if ((selectedModels ?? []).filter((id) => id).length === 0) {
+			toast.error($i18n.t('Model not selected'));
+			return;
+		}
 		if (history.messages[messageId].role === 'user') {
 			if (submit) {
 				// New user message
@@ -227,8 +286,9 @@
 					childrenIds: [],
 					role: 'user',
 					content: userPrompt,
-					...(history.messages[messageId].files && { files: history.messages[messageId].files }),
-					models: selectedModels
+					...(files && { files: files }),
+					models: selectedModels,
+					timestamp: Math.floor(Date.now() / 1000) // Unix epoch
 				};
 
 				let messageParentId = history.messages[messageId].parentId;
@@ -244,10 +304,11 @@
 				history.currentId = userMessageId;
 
 				await tick();
-				await sendPrompt(userPrompt, userMessageId);
+				await sendMessage(history, userMessageId);
 			} else {
 				// Edit user message
 				history.messages[messageId].content = content;
+				history.messages[messageId].files = files;
 				await updateChat();
 			}
 		} else {
@@ -293,6 +354,10 @@
 	};
 
 	const saveMessage = async (messageId, message) => {
+		if (!history.messages?.[messageId]) {
+			return;
+		}
+
 		history.messages[messageId] = message;
 		await updateChat();
 	};
@@ -348,44 +413,16 @@
 
 <div class={className}>
 	{#if Object.keys(history?.messages ?? {}).length == 0}
-		<ChatPlaceholder
-			modelIds={selectedModels}
-			submitPrompt={async (p) => {
-				let text = p;
-
-				if (p.includes('{{CLIPBOARD}}')) {
-					const clipboardText = await navigator.clipboard.readText().catch((err) => {
-						toast.error($i18n.t('Failed to read clipboard contents'));
-						return '{{CLIPBOARD}}';
-					});
-
-					text = p.replaceAll('{{CLIPBOARD}}', clipboardText);
-				}
-
-				prompt = text;
-
-				await tick();
-
-				const chatInputContainerElement = document.getElementById('chat-input-container');
-				if (chatInputContainerElement) {
-					prompt = p;
-
-					chatInputContainerElement.style.height = '';
-					chatInputContainerElement.style.height =
-						Math.min(chatInputContainerElement.scrollHeight, 200) + 'px';
-					chatInputContainerElement.focus();
-				}
-
-				await tick();
-			}}
-		/>
+		<ChatPlaceholder modelIds={selectedModels} {atSelectedModel} {onSelect} />
 	{:else}
 		<div class="w-full pt-2">
 			{#key chatId}
-				<div class="w-full">
+				<section class="w-full" aria-labelledby="chat-conversation">
+					<h2 class="sr-only" id="chat-conversation">{$i18n.t('Chat Conversation')}</h2>
 					{#if messages.at(0)?.parentId !== null}
 						<Loader
 							on:visible={(e) => {
+								console.log('visible');
 								if (!messagesLoading) {
 									loadMoreMessages();
 								}
@@ -393,38 +430,43 @@
 						>
 							<div class="w-full flex justify-center py-1 text-xs animate-pulse items-center gap-2">
 								<Spinner className=" size-4" />
-								<div class=" ">Loading...</div>
+								<div class=" ">{$i18n.t('Loading...')}</div>
 							</div>
 						</Loader>
 					{/if}
-
-					{#each messages as message, messageIdx (message.id)}
-						<Message
-							{chatId}
-							bind:history
-							messageId={message.id}
-							idx={messageIdx}
-							{user}
-							{selectedToolIds}
-							{showPreviousMessage}
-							{showNextMessage}
-							{updateChat}
-							{editMessage}
-							{deleteMessage}
-							{rateMessage}
-							{actionMessage}
-							{saveMessage}
-							{submitMessage}
-							{regenerateResponse}
-							{continueResponse}
-							{mergeResponses}
-							{addMessages}
-							{triggerScroll}
-							{readOnly}
-						/>
-					{/each}
-				</div>
-				<div class="pb-12" />
+					<ul role="log" aria-live="polite" aria-relevant="additions" aria-atomic="false">
+						{#each messages as message, messageIdx (message.id)}
+							<Message
+								{chatId}
+								bind:history
+								{selectedModels}
+								messageId={message.id}
+								idx={messageIdx}
+								{user}
+								{setInputText}
+								{gotoMessage}
+								{showPreviousMessage}
+								{showNextMessage}
+								{updateChat}
+								{editMessage}
+								{deleteMessage}
+								{rateMessage}
+								{actionMessage}
+								{saveMessage}
+								{submitMessage}
+								{regenerateResponse}
+								{continueResponse}
+								{mergeResponses}
+								{addMessages}
+								{triggerScroll}
+								{readOnly}
+								{editCodeBlock}
+								{topPadding}
+							/>
+						{/each}
+					</ul>
+				</section>
+				<div class="pb-18" />
 				{#if bottomPadding}
 					<div class="  pb-6" />
 				{/if}

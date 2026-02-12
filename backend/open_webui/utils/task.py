@@ -2,48 +2,25 @@ import logging
 import math
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 import uuid
-from zoneinfo import ZoneInfo
 
 
 from open_webui.utils.misc import get_last_user_message, get_messages_content
 
-from open_webui.env import SRC_LOG_LEVELS
 from open_webui.config import DEFAULT_RAG_TEMPLATE
 
 
 log = logging.getLogger(__name__)
-log.setLevel(SRC_LOG_LEVELS["RAG"])
 
 
 def get_task_model_id(
     default_model_id: str, task_model: str, task_model_external: str, models
 ) -> str:
-    """
-    Get the model ID for background tasks like title and tag generation.
-    Fixed to prevent KeyError crashes that cause Kubernetes pod restarts.
-    """
     # Set the task model
     task_model_id = default_model_id
-
-    # CRITICAL FIX: Check if models dict exists and is not empty
-    if not models or not isinstance(models, dict):
-        # If no models available, return the default anyway to prevent KeyError
-        return default_model_id
-
-    # Check if the default model exists in the models dict
-    if task_model_id not in models:
-        # If default model doesn't exist, find the first available model
-        if models:
-            task_model_id = next(iter(models.keys()))
-        else:
-            # If no models available, return the default anyway
-            return default_model_id
-
     # Check if the user has a custom task model and use that model
-    # Add safety check to ensure model exists before accessing its properties
-    if task_model_id in models and models[task_model_id].get("owned_by") == "ollama":
+    if models[task_model_id].get("connection_type") == "local":
         if task_model and task_model in models:
             task_model_id = task_model
     else:
@@ -53,16 +30,58 @@ def get_task_model_id(
     return task_model_id
 
 
-def prompt_template(
-    template: str, user_name: Optional[str] = None, user_location: Optional[str] = None
-) -> str:
-    # Get the current date/time in Eastern Time zone (handles EST/EDT automatically)
-    eastern_tz = ZoneInfo("America/New_York")
-    current_date = datetime.now(eastern_tz)
+def prompt_variables_template(template: str, variables: dict[str, str]) -> str:
+    for variable, value in variables.items():
+        template = template.replace(variable, value)
+    return template
+
+
+def prompt_template(template: str, user: Optional[Any] = None) -> str:
+
+    USER_VARIABLES = {}
+
+    if user:
+        if hasattr(user, "model_dump"):
+            user = user.model_dump()
+
+        if isinstance(user, dict):
+            user_info = user.get("info", {}) or {}
+            birth_date = user.get("date_of_birth")
+            age = None
+
+            if birth_date:
+                try:
+                    # If birth_date is str, convert to datetime
+                    if isinstance(birth_date, str):
+                        birth_date = datetime.strptime(birth_date, "%Y-%m-%d")
+
+                    today = datetime.now()
+                    age = (
+                        today.year
+                        - birth_date.year
+                        - (
+                            (today.month, today.day)
+                            < (birth_date.month, birth_date.day)
+                        )
+                    )
+                except Exception as e:
+                    pass
+
+            USER_VARIABLES = {
+                "name": str(user.get("name")),
+                "location": str(user_info.get("location")),
+                "bio": str(user.get("bio")),
+                "gender": str(user.get("gender")),
+                "birth_date": str(birth_date),
+                "age": str(age),
+            }
+
+    # Get the current date
+    current_date = datetime.now()
 
     # Format the date to YYYY-MM-DD
     formatted_date = current_date.strftime("%Y-%m-%d")
-    formatted_time = current_date.strftime("%I:%M:%S %p %Z")
+    formatted_time = current_date.strftime("%I:%M:%S %p")
     formatted_weekday = current_date.strftime("%A")
 
     template = template.replace("{{CURRENT_DATE}}", formatted_date)
@@ -72,19 +91,20 @@ def prompt_template(
     )
     template = template.replace("{{CURRENT_WEEKDAY}}", formatted_weekday)
 
-    if user_name:
-        # Replace {{USER_NAME}} in the template with the user's name
-        template = template.replace("{{USER_NAME}}", user_name)
-    else:
-        # Replace {{USER_NAME}} in the template with "Unknown"
-        template = template.replace("{{USER_NAME}}", "Unknown")
-
-    if user_location:
-        # Replace {{USER_LOCATION}} in the template with the current location
-        template = template.replace("{{USER_LOCATION}}", user_location)
-    else:
-        # Replace {{USER_LOCATION}} in the template with "Unknown"
-        template = template.replace("{{USER_LOCATION}}", "Unknown")
+    template = template.replace("{{USER_NAME}}", USER_VARIABLES.get("name", "Unknown"))
+    template = template.replace("{{USER_BIO}}", USER_VARIABLES.get("bio", "Unknown"))
+    template = template.replace(
+        "{{USER_GENDER}}", USER_VARIABLES.get("gender", "Unknown")
+    )
+    template = template.replace(
+        "{{USER_BIRTH_DATE}}", USER_VARIABLES.get("birth_date", "Unknown")
+    )
+    template = template.replace(
+        "{{USER_AGE}}", str(USER_VARIABLES.get("age", "Unknown"))
+    )
+    template = template.replace(
+        "{{USER_LOCATION}}", USER_VARIABLES.get("location", "Unknown")
+    )
 
     return template
 
@@ -120,7 +140,7 @@ def replace_prompt_variable(template: str, prompt: str) -> str:
 
 
 def replace_messages_variable(
-    template: str, messages: Optional[list[str]] = None, filter_reasoning: bool = False
+    template: str, messages: Optional[list[dict]] = None
 ) -> str:
     def replacement_function(match):
         full_match = match.group(0)
@@ -133,22 +153,22 @@ def replace_messages_variable(
 
         # Process messages based on the number of messages required
         if full_match == "{{MESSAGES}}":
-            return get_messages_content(messages, filter_reasoning)
+            return get_messages_content(messages)
         elif start_length is not None:
-            return get_messages_content(messages[: int(start_length)], filter_reasoning)
+            return get_messages_content(messages[: int(start_length)])
         elif end_length is not None:
-            return get_messages_content(messages[-int(end_length) :], filter_reasoning)
+            return get_messages_content(messages[-int(end_length) :])
         elif middle_length is not None:
             mid = int(middle_length)
 
             if len(messages) <= mid:
-                return get_messages_content(messages, filter_reasoning)
+                return get_messages_content(messages)
             # Handle middle truncation: split to get start and end portions of the messages list
             half = mid // 2
             start_msgs = messages[:half]
             end_msgs = messages[-half:] if mid % 2 == 0 else messages[-(half + 1) :]
-            formatted_start = get_messages_content(start_msgs, filter_reasoning)
-            formatted_end = get_messages_content(end_msgs, filter_reasoning)
+            formatted_start = get_messages_content(start_msgs)
+            formatted_end = get_messages_content(end_msgs)
             return f"{formatted_start}\n{formatted_end}"
         return ""
 
@@ -168,6 +188,8 @@ def rag_template(template: str, context: str, query: str):
     if template.strip() == "":
         template = DEFAULT_RAG_TEMPLATE
 
+    template = prompt_template(template)
+
     if "[context]" not in template and "{{CONTEXT}}" not in template:
         log.debug(
             "WARNING: The RAG template does not contain the '[context]' or '{{CONTEXT}}' placeholder."
@@ -184,94 +206,76 @@ def rag_template(template: str, context: str, query: str):
     if "[query]" in context:
         query_placeholder = "{{QUERY" + str(uuid.uuid4()) + "}}"
         template = template.replace("[query]", query_placeholder)
-        query_placeholders.append(query_placeholder)
+        query_placeholders.append((query_placeholder, "[query]"))
 
     if "{{QUERY}}" in context:
         query_placeholder = "{{QUERY" + str(uuid.uuid4()) + "}}"
         template = template.replace("{{QUERY}}", query_placeholder)
-        query_placeholders.append(query_placeholder)
+        query_placeholders.append((query_placeholder, "{{QUERY}}"))
 
     template = template.replace("[context]", context)
     template = template.replace("{{CONTEXT}}", context)
+
     template = template.replace("[query]", query)
     template = template.replace("{{QUERY}}", query)
 
-    for query_placeholder in query_placeholders:
-        template = template.replace(query_placeholder, query)
+    for query_placeholder, original_placeholder in query_placeholders:
+        template = template.replace(query_placeholder, original_placeholder)
 
     return template
 
 
 def title_generation_template(
-    template: str, messages: list[dict], user: Optional[dict] = None
+    template: str, messages: list[dict], user: Optional[Any] = None
 ) -> str:
-    # Filter reasoning content from messages for title generation
-    prompt = get_last_user_message(messages, filter_reasoning=True)
+
+    prompt = get_last_user_message(messages)
     template = replace_prompt_variable(template, prompt)
-    template = replace_messages_variable(template, messages, filter_reasoning=True)
+    template = replace_messages_variable(template, messages)
 
-    template = prompt_template(
-        template,
-        **(
-            {"user_name": user.get("name"), "user_location": user.get("location")}
-            if user
-            else {}
-        ),
-    )
+    template = prompt_template(template, user)
 
+    return template
+
+
+def follow_up_generation_template(
+    template: str, messages: list[dict], user: Optional[Any] = None
+) -> str:
+    prompt = get_last_user_message(messages)
+    template = replace_prompt_variable(template, prompt)
+    template = replace_messages_variable(template, messages)
+
+    template = prompt_template(template, user)
     return template
 
 
 def tags_generation_template(
-    template: str, messages: list[dict], user: Optional[dict] = None
+    template: str, messages: list[dict], user: Optional[Any] = None
 ) -> str:
-    # Filter reasoning content from messages for tags generation
-    prompt = get_last_user_message(messages, filter_reasoning=True)
+    prompt = get_last_user_message(messages)
     template = replace_prompt_variable(template, prompt)
-    template = replace_messages_variable(template, messages, filter_reasoning=True)
+    template = replace_messages_variable(template, messages)
 
-    template = prompt_template(
-        template,
-        **(
-            {"user_name": user.get("name"), "user_location": user.get("location")}
-            if user
-            else {}
-        ),
-    )
+    template = prompt_template(template, user)
     return template
 
 
 def image_prompt_generation_template(
-    template: str, messages: list[dict], user: Optional[dict] = None
+    template: str, messages: list[dict], user: Optional[Any] = None
 ) -> str:
-    # Filter reasoning content from messages for image prompt generation
-    prompt = get_last_user_message(messages, filter_reasoning=True)
+    prompt = get_last_user_message(messages)
     template = replace_prompt_variable(template, prompt)
-    template = replace_messages_variable(template, messages, filter_reasoning=True)
+    template = replace_messages_variable(template, messages)
 
-    template = prompt_template(
-        template,
-        **(
-            {"user_name": user.get("name"), "user_location": user.get("location")}
-            if user
-            else {}
-        ),
-    )
+    template = prompt_template(template, user)
     return template
 
 
 def emoji_generation_template(
-    template: str, prompt: str, user: Optional[dict] = None
+    template: str, prompt: str, user: Optional[Any] = None
 ) -> str:
     template = replace_prompt_variable(template, prompt)
-    template = prompt_template(
-        template,
-        **(
-            {"user_name": user.get("name"), "user_location": user.get("location")}
-            if user
-            else {}
-        ),
-    )
+    template = prompt_template(template, user)
 
     return template
 
@@ -281,40 +285,24 @@ def autocomplete_generation_template(
     prompt: str,
     messages: Optional[list[dict]] = None,
     type: Optional[str] = None,
-    user: Optional[dict] = None,
+    user: Optional[Any] = None,
 ) -> str:
     template = template.replace("{{TYPE}}", type if type else "")
     template = replace_prompt_variable(template, prompt)
-    # Filter reasoning content from messages for autocomplete generation
-    template = replace_messages_variable(template, messages, filter_reasoning=True)
+    template = replace_messages_variable(template, messages)
 
-    template = prompt_template(
-        template,
-        **(
-            {"user_name": user.get("name"), "user_location": user.get("location")}
-            if user
-            else {}
-        ),
-    )
+    template = prompt_template(template, user)
     return template
 
 
 def query_generation_template(
-    template: str, messages: list[dict], user: Optional[dict] = None
+    template: str, messages: list[dict], user: Optional[Any] = None
 ) -> str:
-    # Filter reasoning content from messages for query generation
-    prompt = get_last_user_message(messages, filter_reasoning=True)
+    prompt = get_last_user_message(messages)
     template = replace_prompt_variable(template, prompt)
-    template = replace_messages_variable(template, messages, filter_reasoning=True)
+    template = replace_messages_variable(template, messages)
 
-    template = prompt_template(
-        template,
-        **(
-            {"user_name": user.get("name"), "user_location": user.get("location")}
-            if user
-            else {}
-        ),
-    )
+    template = prompt_template(template, user)
     return template
 
 

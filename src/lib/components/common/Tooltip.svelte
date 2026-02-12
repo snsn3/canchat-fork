@@ -2,69 +2,53 @@
 	import DOMPurify from 'dompurify';
 
 	import { onDestroy } from 'svelte';
-	import { marked } from 'marked';
 
 	import tippy from 'tippy.js';
-	import { roundArrow } from 'tippy.js';
+
+	export let elementId = '';
+
+	export let as = 'div';
+	export let className = 'flex';
 
 	export let placement = 'top';
 	export let content = `I'm a tooltip!`;
 	export let touch = true;
-	export let className = 'flex';
 	export let theme = '';
 	export let offset = [0, 4];
 	export let allowHTML = true;
-	export let popperOptions = {};
 	export let tippyOptions = {};
-	export let tooltipID = '';
+	export let interactive = false;
+
+	export let onClick = () => {};
 
 	let tooltipElement;
 	let tooltipInstance;
 
-	const hideOnEsc = {
-		name: 'hideOnEsc',
-		defaultValue: true,
-		fn({ hide }) {
-			function onKeyDown(event) {
-				if (event.keyCode === 27) {
-					hide();
-				}
-			}
+	$: if (tooltipElement && (content || elementId)) {
+		let tooltipContent = null;
 
-			return {
-				onShow() {
-					document.addEventListener('keydown', onKeyDown);
-				},
-				onHide() {
-					document.removeEventListener('keydown', onKeyDown);
-				}
-			};
-		}
-	};
-
-	$: if (tooltipElement && content) {
-		if (tooltipInstance) {
-			tooltipInstance.setContent(DOMPurify.sanitize(content));
+		if (elementId) {
+			tooltipContent = document.getElementById(`${elementId}`);
 		} else {
-			tooltipInstance = tippy(tooltipElement, {
-				appendTo: () => document.body,
-				content: DOMPurify.sanitize(content),
-				trigger: 'mouseenter focus focusin',
-				interactive: true,
-				placement: placement,
-				aria: {
-					content: 'auto',
-					expanded: false
-				},
-				allowHTML: allowHTML,
-				touch: touch,
-				...(theme !== '' ? { theme } : { theme: 'dark' }),
-				arrow: false,
-				offset: offset,
-				...tippyOptions,
-				plugins: [hideOnEsc],
-				popperOptions: popperOptions
-			});
+			tooltipContent = DOMPurify.sanitize(content);
+		}
+
+		if (tooltipInstance) {
+			tooltipInstance.setContent(tooltipContent);
+		} else {
+			if (content) {
+				tooltipInstance = tippy(tooltipElement, {
+					content: tooltipContent,
+					placement: placement,
+					allowHTML: allowHTML,
+					touch: touch,
+					...(theme !== '' ? { theme } : { theme: 'dark' }),
+					arrow: false,
+					offset: offset,
+					...(interactive ? { interactive: true } : {}),
+					...tippyOptions
+				});
+			}
 		}
 	} else if (tooltipInstance && content === '') {
 		if (tooltipInstance) {
@@ -79,6 +63,9 @@
 	});
 </script>
 
-<div bind:this={tooltipElement} class={className}>
+<!-- svelte-ignore a11y-no-static-element-interactions -->
+<svelte:element this={as} bind:this={tooltipElement} class={className} on:click={onClick}>
 	<slot />
-</div>
+</svelte:element>
+
+<slot name="tooltip"></slot>

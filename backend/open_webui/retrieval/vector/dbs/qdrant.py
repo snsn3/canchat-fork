@@ -1,201 +1,131 @@
-from qdrant_client import AsyncQdrantClient, models
-from qdrant_client.http.models import (
-    Distance,
-    PointStruct,
-    VectorParams,
-    Filter,
-    FieldCondition,
-    HnswConfigDiff,
-    MatchValue,
-    ScalarQuantization,
-    ScalarQuantizationConfig,
-    ScalarType,
-)
-
-
 from typing import Optional
+import logging
+from urllib.parse import urlparse
 
-from open_webui.retrieval.vector.main import VectorItem, SearchResult, GetResult
+from qdrant_client import QdrantClient as Qclient
+from qdrant_client.http.models import PointStruct
+from qdrant_client.models import models
+
+from open_webui.retrieval.vector.main import (
+    VectorDBBase,
+    VectorItem,
+    SearchResult,
+    GetResult,
+)
 from open_webui.config import (
+    QDRANT_URI,
     QDRANT_API_KEY,
-    QDRANT_ENABLE_QUANTIZATION,
-    QDRANT_ON_DISK_HNSW,
-    QDRANT_ON_DISK_PAYLOAD,
-    QDRANT_ON_DISK_VECTOR,
+    QDRANT_ON_DISK,
+    QDRANT_GRPC_PORT,
     QDRANT_PREFER_GRPC,
-    QDRANT_TIMEOUT_SECONDS,
-    QDRANT_URL,
+    QDRANT_COLLECTION_PREFIX,
+    QDRANT_TIMEOUT,
+    QDRANT_HNSW_M,
 )
 
+NO_LIMIT = 999999999
 
-class QdrantClient:
+log = logging.getLogger(__name__)
+
+
+class QdrantClient(VectorDBBase):
     def __init__(self):
-        self.client = AsyncQdrantClient(
-            url=QDRANT_URL,
-            api_key=QDRANT_API_KEY,
-            timeout=int(QDRANT_TIMEOUT_SECONDS),
-            prefer_grpc=QDRANT_PREFER_GRPC,
-        )
+        self.collection_prefix = QDRANT_COLLECTION_PREFIX
+        self.QDRANT_URI = QDRANT_URI
+        self.QDRANT_API_KEY = QDRANT_API_KEY
+        self.QDRANT_ON_DISK = QDRANT_ON_DISK
+        self.PREFER_GRPC = QDRANT_PREFER_GRPC
+        self.GRPC_PORT = QDRANT_GRPC_PORT
+        self.QDRANT_TIMEOUT = QDRANT_TIMEOUT
+        self.QDRANT_HNSW_M = QDRANT_HNSW_M
 
-    def _result_to_get_result(self, result) -> GetResult:
+        if not self.QDRANT_URI:
+            self.client = None
+            return
+
+        # Unified handling for either scheme
+        parsed = urlparse(self.QDRANT_URI)
+        host = parsed.hostname or self.QDRANT_URI
+        http_port = parsed.port or 6333  # default REST port
+
+        if self.PREFER_GRPC:
+            self.client = Qclient(
+                host=host,
+                port=http_port,
+                grpc_port=self.GRPC_PORT,
+                prefer_grpc=self.PREFER_GRPC,
+                api_key=self.QDRANT_API_KEY,
+                timeout=self.QDRANT_TIMEOUT,
+            )
+        else:
+            self.client = Qclient(
+                url=self.QDRANT_URI,
+                api_key=self.QDRANT_API_KEY,
+                timeout=QDRANT_TIMEOUT,
+            )
+
+    def _result_to_get_result(self, points) -> GetResult:
         ids = []
         documents = []
         metadatas = []
 
-        # Check if result is valid and has records
-        if result and len(result) > 0 and len(result[0]) > 0:
-            # Iterate over the tuple of records
-            for record in result[0]:
-                ids.append([record.id])
-                documents.append([record.payload["text"]])
-                metadatas.append([record.payload["metadata"]])
+        for point in points:
+            payload = point.payload
+            ids.append(point.id)
+            documents.append(payload["text"])
+            metadatas.append(payload["metadata"])
 
         return GetResult(
             **{
-                "ids": ids,
-                "documents": documents,
-                "metadatas": metadatas,
+                "ids": [ids],
+                "documents": [documents],
+                "metadatas": [metadatas],
             }
         )
 
-    def _result_to_search_result(self, result) -> SearchResult:
-        ids = []
-        distances = []
-        documents = []
-        metadatas = []
-
-        for point in result.points:
-            ids.append([point.id])
-            distances.append([point.score])
-            documents.append([point.payload["text"]])
-            metadatas.append([point.payload["metadata"]])
-
-        return SearchResult(
-            **{
-                "ids": ids,
-                "distances": distances,
-                "documents": documents,
-                "metadatas": metadatas,
-            }
+    def _create_collection(self, collection_name: str, dimension: int):
+        collection_name_with_prefix = f"{self.collection_prefix}_{collection_name}"
+        self.client.create_collection(
+            collection_name=collection_name_with_prefix,
+            vectors_config=models.VectorParams(
+                size=dimension,
+                distance=models.Distance.COSINE,
+                on_disk=self.QDRANT_ON_DISK,
+            ),
+            hnsw_config=models.HnswConfigDiff(
+                m=self.QDRANT_HNSW_M,
+            ),
         )
 
-    async def has_collection(self, collection_name: str) -> bool:
-        # Check if the collection exists based on the collection name.
-        return await self.client.collection_exists(collection_name=collection_name)
-
-    async def list_collections(self) -> list[str]:
-        # List all collection names.
-        collections_response = await self.client.get_collections()
-        return [collection.name for collection in collections_response.collections]
-
-    async def get_collection_sample_metadata(
-        self, collection_name: str
-    ) -> Optional[dict]:
-        """Get metadata from a sample point in the collection to check properties like age."""
-        try:
-            points, _ = await self.client.scroll(
-                collection_name=collection_name, limit=1, with_payload=True
-            )
-            if points and len(points) > 0:
-                point = points[0]
-                if hasattr(point, "payload") and point.payload:
-                    return point.payload.get("metadata", {})
-            return None
-        except Exception:
-            return None
-
-    async def delete_collection(self, collection_name: str):
-        # Delete the collection based on the collection name.
-        return await self.client.delete_collection(collection_name=collection_name)
-
-    async def search(
-        self, collection_name: str, vectors: list[list[float | int]], limit: int
-    ) -> Optional[SearchResult]:
-        # Search for the nearest neighbor items based on the vectors and return 'limit' number of results.
-        result = await self.client.query_points(
-            collection_name=collection_name,
-            query=vectors,
-            limit=limit,
-            with_payload=True,
+        # Create payload indexes for efficient filtering
+        self.client.create_payload_index(
+            collection_name=collection_name_with_prefix,
+            field_name="metadata.hash",
+            field_schema=models.KeywordIndexParams(
+                type=models.KeywordIndexType.KEYWORD,
+                is_tenant=False,
+                on_disk=self.QDRANT_ON_DISK,
+            ),
         )
-
-        return self._result_to_search_result(result)
-
-    async def query(
-        self, collection_name: str, filter: dict, limit: Optional[int] = None
-    ) -> Optional[GetResult]:
-        try:
-            if not await self.client.collection_exists(collection_name=collection_name):
-                return None
-
-            # Build the conditions if a filter is provided.
-            qdrant_filter = None
-            if filter:
-                conditions = [
-                    FieldCondition(key=key, match=MatchValue(value=value))
-                    for key, value in filter.items()
-                ]
-                qdrant_filter = Filter(must=conditions)
-
-            points, _ = await self.client.scroll(
-                collection_name=collection_name,
-                scroll_filter=qdrant_filter,
-                limit=limit or 1,
-            )
-
-            return self._result_to_get_result(points)
-
-        except Exception as e:
-            print(f"Error querying Qdrant: {e}")
-            return None
-
-    async def get(self, collection_name: str) -> Optional[GetResult]:
-        points = await self.client.count(
-            collection_name=collection_name,
+        self.client.create_payload_index(
+            collection_name=collection_name_with_prefix,
+            field_name="metadata.file_id",
+            field_schema=models.KeywordIndexParams(
+                type=models.KeywordIndexType.KEYWORD,
+                is_tenant=False,
+                on_disk=self.QDRANT_ON_DISK,
+            ),
         )
-        if points.count:
-            # Get all the items in the collection.
-            result = await self.client.scroll(
-                collection_name=collection_name,
-                with_payload=True,
-                limit=points.count,
+        log.info(f"collection {collection_name_with_prefix} successfully created!")
+
+    def _create_collection_if_not_exists(self, collection_name, dimension):
+        if not self.has_collection(collection_name=collection_name):
+            self._create_collection(
+                collection_name=collection_name, dimension=dimension
             )
 
-            return self._result_to_get_result(result)
-
-        return None
-
-    async def insert(self, collection_name: str, items: list[VectorItem]):
-        return await self.upsert(collection_name=collection_name, items=items)
-
-    async def upsert(self, collection_name: str, items: list[VectorItem]):
-        # Update the items in the collection, if the items are not present, insert them. If the collection does not exist, it will be created.
-
-        quantization_config = (
-            ScalarQuantization(
-                scalar=ScalarQuantizationConfig(type=ScalarType.INT8, always_ram=True)
-            )
-            if QDRANT_ENABLE_QUANTIZATION
-            else None
-        )
-
-        if not await self.client.collection_exists(collection_name=collection_name):
-            await self.client.create_collection(
-                collection_name=collection_name,
-                on_disk_payload=QDRANT_ON_DISK_PAYLOAD,
-                hnsw_config=HnswConfigDiff(on_disk=QDRANT_ON_DISK_HNSW),
-                vectors_config=VectorParams(
-                    size=len(items[0]["vector"]),
-                    distance=Distance.COSINE,
-                    on_disk=QDRANT_ON_DISK_VECTOR,
-                    multivector_config=models.MultiVectorConfig(
-                        comparator=models.MultiVectorComparator.MAX_SIM
-                    ),
-                    quantization_config=quantization_config,
-                ),
-            )
-
-        points = [
+    def _create_points(self, items: list[VectorItem]):
+        return [
             PointStruct(
                 id=item["id"],
                 vector=item["vector"],
@@ -204,36 +134,123 @@ class QdrantClient:
             for item in items
         ]
 
-        return await self.client.upsert(
-            collection_name=collection_name,
-            points=points,
+    def has_collection(self, collection_name: str) -> bool:
+        return self.client.collection_exists(
+            f"{self.collection_prefix}_{collection_name}"
         )
 
-    async def delete(
+    def delete_collection(self, collection_name: str):
+        return self.client.delete_collection(
+            collection_name=f"{self.collection_prefix}_{collection_name}"
+        )
+
+    def search(
+        self,
+        collection_name: str,
+        vectors: list[list[float | int]],
+        filter: Optional[dict] = None,
+        limit: int = 10,
+    ) -> Optional[SearchResult]:
+        # Search for the nearest neighbor items based on the vectors and return 'limit' number of results.
+        if limit is None:
+            limit = NO_LIMIT  # otherwise qdrant would set limit to 10!
+
+        query_response = self.client.query_points(
+            collection_name=f"{self.collection_prefix}_{collection_name}",
+            query=vectors[0],
+            limit=limit,
+        )
+        get_result = self._result_to_get_result(query_response.points)
+        return SearchResult(
+            ids=get_result.ids,
+            documents=get_result.documents,
+            metadatas=get_result.metadatas,
+            # qdrant distance is [-1, 1], normalize to [0, 1]
+            distances=[[(point.score + 1.0) / 2.0 for point in query_response.points]],
+        )
+
+    def query(self, collection_name: str, filter: dict, limit: Optional[int] = None):
+        # Construct the filter string for querying
+        if not self.has_collection(collection_name):
+            return None
+        try:
+            if limit is None:
+                limit = NO_LIMIT  # otherwise qdrant would set limit to 10!
+
+            field_conditions = []
+            for key, value in filter.items():
+                field_conditions.append(
+                    models.FieldCondition(
+                        key=f"metadata.{key}", match=models.MatchValue(value=value)
+                    )
+                )
+
+            points = self.client.scroll(
+                collection_name=f"{self.collection_prefix}_{collection_name}",
+                scroll_filter=models.Filter(should=field_conditions),
+                limit=limit,
+            )
+            return self._result_to_get_result(points[0])
+        except Exception as e:
+            log.exception(f"Error querying a collection '{collection_name}': {e}")
+            return None
+
+    def get(self, collection_name: str) -> Optional[GetResult]:
+        # Get all the items in the collection.
+        points = self.client.scroll(
+            collection_name=f"{self.collection_prefix}_{collection_name}",
+            limit=NO_LIMIT,  # otherwise qdrant would set limit to 10!
+        )
+        return self._result_to_get_result(points[0])
+
+    def insert(self, collection_name: str, items: list[VectorItem]):
+        # Insert the items into the collection, if the collection does not exist, it will be created.
+        self._create_collection_if_not_exists(collection_name, len(items[0]["vector"]))
+        points = self._create_points(items)
+        self.client.upload_points(f"{self.collection_prefix}_{collection_name}", points)
+
+    def upsert(self, collection_name: str, items: list[VectorItem]):
+        # Update the items in the collection, if the items are not present, insert them. If the collection does not exist, it will be created.
+        self._create_collection_if_not_exists(collection_name, len(items[0]["vector"]))
+        points = self._create_points(items)
+        return self.client.upsert(f"{self.collection_prefix}_{collection_name}", points)
+
+    def delete(
         self,
         collection_name: str,
         ids: Optional[list[str]] = None,
         filter: Optional[dict] = None,
     ):
         # Delete the items from the collection based on the ids.
-        if ids:
-            selector = ids
-        elif filter:
-            conditions = [
-                FieldCondition(key=key, match=MatchValue(value=value))
-                for key, value in filter.items()
-            ]
-            selector = Filter(must=conditions)
+        field_conditions = []
 
-        return await self.client.delete(
-            collection_name=collection_name,
-            points_selector=selector,
+        if ids:
+            for id_value in ids:
+                field_conditions.append(
+                    models.FieldCondition(
+                        key="metadata.id",
+                        match=models.MatchValue(value=id_value),
+                    ),
+                ),
+        elif filter:
+            for key, value in filter.items():
+                field_conditions.append(
+                    models.FieldCondition(
+                        key=f"metadata.{key}",
+                        match=models.MatchValue(value=value),
+                    ),
+                ),
+
+        return self.client.delete(
+            collection_name=f"{self.collection_prefix}_{collection_name}",
+            points_selector=models.FilterSelector(
+                filter=models.Filter(must=field_conditions)
+            ),
         )
 
-    async def reset(self):
+    def reset(self):
         # Resets the database. This will delete all collections and item entries.
-
-        collection_response = await self.client.get_collections()
-
-        for collection in collection_response.collections:
-            await self.client.delete_collection(collection_name=collection.name)
+        collection_names = self.client.get_collections().collections
+        for collection_name in collection_names:
+            if collection_name.name.startswith(self.collection_prefix):
+                self.client.delete_collection(collection_name=collection_name.name)

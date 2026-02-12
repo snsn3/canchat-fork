@@ -4,10 +4,10 @@
 	import relativeTime from 'dayjs/plugin/relativeTime';
 	dayjs.extend(relativeTime);
 
-	import { onMount, onDestroy, getContext } from 'svelte';
+	import { onMount, getContext } from 'svelte';
 	import { goto } from '$app/navigation';
 
-	import { WEBUI_NAME, config, user, showSidebar, knowledge, socket } from '$lib/stores';
+	import { WEBUI_NAME, config, user, showSidebar, knowledge } from '$lib/stores';
 	import { WEBUI_BASE_URL } from '$lib/constants';
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -16,20 +16,22 @@
 	import UsersSolid from '$lib/components/icons/UsersSolid.svelte';
 	import ChevronRight from '$lib/components/icons/ChevronRight.svelte';
 	import EllipsisHorizontal from '$lib/components/icons/EllipsisHorizontal.svelte';
+	import Search from '$lib/components/icons/Search.svelte';
 	import User from '$lib/components/icons/User.svelte';
 	import UserCircleSolid from '$lib/components/icons/UserCircleSolid.svelte';
-	import GroupModal from './Groups/EditGroupModal.svelte';
+	import EditGroupModal from './Groups/EditGroupModal.svelte';
 	import Pencil from '$lib/components/icons/Pencil.svelte';
 	import GroupItem from './Groups/GroupItem.svelte';
-	import AddGroupModal from './Groups/AddGroupModal.svelte';
 	import { createNewGroup, getGroups } from '$lib/apis/groups';
-	import { getUserDefaultPermissions, updateUserDefaultPermissions } from '$lib/apis/users';
+	import {
+		getUserDefaultPermissions,
+		getAllUsers,
+		updateUserDefaultPermissions
+	} from '$lib/apis/users';
 
 	const i18n = getContext('i18n');
 
 	let loaded = false;
-
-	export let users = [];
 
 	let groups = [];
 	let filteredGroups;
@@ -45,27 +47,9 @@
 	});
 
 	let search = '';
-	let defaultPermissions = {
-		workspace: {
-			models: false,
-			knowledge: false,
-			prompts: false,
-			tools: false
-		},
-		chat: {
-			controls: true,
-			file_upload: true,
-			delete: true,
-			edit: true,
-			temporary: true
-		},
-		features: {
-			web_search: true,
-			image_generation: true
-		}
-	};
+	let defaultPermissions = {};
 
-	let showCreateGroupModal = false;
+	let showAddGroupModal = false;
 	let showDefaultPermissionsModal = false;
 
 	const setGroups = async () => {
@@ -85,6 +69,8 @@
 	};
 
 	const updateDefaultPermissionsHandler = async (group) => {
+		console.debug(group.permissions);
+
 		const res = await updateUserDefaultPermissions(localStorage.token, group.permissions).catch(
 			(error) => {
 				toast.error(`${error}`);
@@ -101,86 +87,43 @@
 	onMount(async () => {
 		if ($user?.role !== 'admin') {
 			await goto('/');
-		} else {
-			await setGroups();
-			defaultPermissions = await getUserDefaultPermissions(localStorage.token);
+			return;
 		}
+
+		defaultPermissions = await getUserDefaultPermissions(localStorage.token);
+		await setGroups();
 		loaded = true;
-
-		// Set up Socket.IO event listeners for real-time group updates
-		if ($socket) {
-			$socket.on('group-membership-update', handleGroupMembershipUpdate);
-		}
-	});
-
-	// Handle real-time group membership updates
-	const handleGroupMembershipUpdate = async (data) => {
-		const { group_id, group_name, user_count, action, users_affected, users_count, timestamp } =
-			data;
-
-		// Find and update the group in our local state
-		const groupIndex = groups.findIndex((g) => g.id === group_id);
-		if (groupIndex !== -1) {
-			// Refresh the groups data to get the accurate user list
-			// This ensures we have the correct user IDs and count
-			try {
-				groups = await getGroups(localStorage.token);
-			} catch (error) {
-				console.error('Failed to refresh groups after membership update:', error);
-				// Fallback: just update the count if we can't fetch fresh data
-				groups[groupIndex] = {
-					...groups[groupIndex],
-					user_ids: Array(user_count)
-						.fill(null)
-						.map((_, i) => `placeholder_${i}`)
-				};
-				groups = [...groups];
-			}
-
-			// Show a toast notification
-			const actionText = action === 'added' ? 'added to' : 'removed from';
-			const userText = users_count === 1 ? 'user' : 'users';
-			toast.info(`${users_count} ${userText} ${actionText} group "${group_name}"`);
-		}
-	};
-
-	// Clean up Socket.IO event listeners when component is destroyed
-	onDestroy(() => {
-		if ($socket) {
-			$socket.off('group-membership-update', handleGroupMembershipUpdate);
-		}
 	});
 </script>
 
 {#if loaded}
-	<AddGroupModal bind:show={showCreateGroupModal} onSubmit={addGroupHandler} />
-	<div class="mt-0.5 mb-2 gap-1 flex flex-col md:flex-row justify-between">
-		<div class="flex md:self-center text-lg font-medium px-0.5">
-			{$i18n.t('Groups')}
-			<div class="flex self-center w-[1px] h-6 mx-2.5 bg-gray-50 dark:bg-gray-850" />
+	<EditGroupModal
+		bind:show={showAddGroupModal}
+		edit={false}
+		tabs={['general', 'permissions']}
+		permissions={defaultPermissions}
+		onSubmit={addGroupHandler}
+	/>
 
-			<span class="text-lg font-medium text-gray-500 dark:text-gray-300">{groups.length}</span>
+	<div class="mt-0.5 mb-2 gap-1 flex flex-col md:flex-row justify-between">
+		<div class="flex items-center md:self-center text-xl font-medium px-0.5 gap-2 shrink-0">
+			<div>
+				{$i18n.t('Groups')}
+			</div>
+
+			<div class="text-lg font-medium text-gray-500 dark:text-gray-500">
+				{groups.length}
+			</div>
 		</div>
 
 		<div class="flex gap-1">
 			<div class=" flex w-full space-x-2">
 				<div class="flex flex-1">
 					<div class=" self-center ml-1 mr-3">
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							viewBox="0 0 20 20"
-							fill="currentColor"
-							class="w-4 h-4"
-						>
-							<path
-								fill-rule="evenodd"
-								d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z"
-								clip-rule="evenodd"
-							/>
-						</svg>
+						<Search />
 					</div>
 					<input
-						class=" w-full text-sm pr-4 py-1 rounded-r-xl outline-none bg-transparent"
+						class=" w-full text-sm pr-4 py-1 rounded-r-xl outline-hidden bg-transparent"
 						bind:value={search}
 						placeholder={$i18n.t('Search')}
 					/>
@@ -189,10 +132,9 @@
 				<div>
 					<Tooltip content={$i18n.t('Create Group')}>
 						<button
-							id="add-group"
 							class=" p-2 rounded-xl hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 transition font-medium text-sm flex items-center space-x-1"
 							on:click={() => {
-								showCreateGroupModal = !showCreateGroupModal;
+								showAddGroupModal = !showAddGroupModal;
 							}}
 						>
 							<Plus className="size-3.5" />
@@ -219,7 +161,7 @@
 						class=" px-4 py-1.5 text-sm rounded-full bg-black hover:bg-gray-800 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition font-medium flex items-center space-x-1"
 						aria-label={$i18n.t('Create Group')}
 						on:click={() => {
-							showCreateGroupModal = true;
+							showAddGroupModal = true;
 						}}
 					>
 						{$i18n.t('Create Group')}
@@ -228,29 +170,25 @@
 			</div>
 		{:else}
 			<div>
-				<div class=" flex items-center gap-3 justify-between text-xs uppercase px-1 font-bold">
-					<div class="w-full">{$i18n.t('Group')}</div>
+				<div class=" flex items-center gap-3 justify-between text-xs uppercase px-1 font-medium">
+					<div class="w-full basis-3/5">{$i18n.t('Group')}</div>
 
-					<div class="w-full">{$i18n.t('Users')}</div>
-
-					<div class="w-full">{$i18n.t('Domains')}</div>
-
-					<div class="w-full"></div>
+					<div class="w-full basis-2/5 text-right">{$i18n.t('Users')}</div>
 				</div>
 
-				<hr class="mt-1.5 border-gray-50 dark:border-gray-850" />
+				<hr class="mt-1.5 border-gray-100/30 dark:border-gray-850/30" />
 
 				{#each filteredGroups as group}
 					<div class="my-2">
-						<GroupItem {group} {users} {setGroups} />
+						<GroupItem {group} {setGroups} {defaultPermissions} />
 					</div>
 				{/each}
 			</div>
 		{/if}
 
-		<hr class="mb-2 border-gray-50 dark:border-gray-850" />
+		<hr class="mb-2 border-gray-100/30 dark:border-gray-850/30" />
 
-		<GroupModal
+		<EditGroupModal
 			bind:show={showDefaultPermissionsModal}
 			tabs={['permissions']}
 			bind:permissions={defaultPermissions}
