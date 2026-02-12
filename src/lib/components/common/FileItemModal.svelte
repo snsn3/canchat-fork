@@ -112,6 +112,12 @@
 		}
 	};
 
+	const escapeHtml = (text: string): string => {
+		const div = document.createElement('div');
+		div.textContent = text;
+		return div.innerHTML;
+	};
+
 	const renderExcelSheet = async () => {
 		if (!excelWorkbook || !selectedSheet) return;
 
@@ -134,14 +140,19 @@
 				if (value === null || value === undefined) {
 					cellValue = '';
 				} else if (typeof value === 'object' && 'richText' in value) {
-					cellValue = value.richText.map((rt: any) => rt.text).join('');
+					interface RichTextSegment {
+						text: string;
+					}
+					cellValue = (value.richText as RichTextSegment[]).map(rt => rt.text).join('');
 				} else if (typeof value === 'object' && 'formula' in value) {
 					cellValue = value.result?.toString() || '';
 				} else {
 					cellValue = value.toString();
 				}
 				
-				html += `<td>${cellValue}</td>`;
+				// Escape HTML to prevent XSS
+				const escapedValue = escapeHtml(cellValue);
+				html += `<td>${escapedValue}</td>`;
 			});
 			html += '</tr>';
 		});
