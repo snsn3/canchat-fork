@@ -62,10 +62,6 @@ async def create_code_session(
     try:
         user_id = user.id
         
-        # Generate session ID and workspace path
-        session_id = None
-        workspace_path = None
-        
         # Try to create session in database first (with empty workspace path)
         session = code_sessions.insert_new_session(
             user_id=user_id,

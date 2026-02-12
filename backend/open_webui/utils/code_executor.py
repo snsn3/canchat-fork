@@ -174,4 +174,4 @@ class DockerCodeExecutor:
         try:
             self.client.close()
         except Exception as e:
-            log.error(f"Error closing Docker client: {e}")
+            log.error(f"Error closing Docker client: {e}. This may leave dangling connections, but should not impact functionality.")
