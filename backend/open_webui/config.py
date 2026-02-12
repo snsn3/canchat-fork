@@ -897,6 +897,13 @@ WEBUI_URL = PersistentConfig(
 )
 
 
+CANCHAT_PUBLIC_URL = PersistentConfig(
+    "CANCHAT_PUBLIC_URL",
+    "webui.canchat_public_url",
+    os.environ.get("CANCHAT_PUBLIC_URL") or os.environ.get("WEBUI_URL") or "http://localhost:3000",
+)
+
+
 ENABLE_SIGNUP = PersistentConfig(
     "ENABLE_SIGNUP",
     "ui.enable_signup",
