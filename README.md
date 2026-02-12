@@ -14,6 +14,22 @@
 
 **Open WebUI is an [extensible](https://docs.openwebui.com/features/plugin/), feature-rich, and user-friendly self-hosted AI platform designed to operate entirely offline.** It supports various LLM runners like **Ollama** and **OpenAI-compatible APIs**, with **built-in inference engine** for RAG, making it a **powerful AI deployment solution**.
 
+## 🚨 CANChat Setup - Important!
+
+**Before building the Docker image, you must download the required local models:**
+
+```bash
+./download-models.sh
+```
+
+This downloads the embedding and Whisper models required for offline operation (~240MB).
+
+📖 **Full setup instructions**: See [SETUP.md](./SETUP.md)
+
+🌍 **Language Support**: Full bilingual UI (English & French)
+
+---
+
 Passionate about open-source AI? [Join our team →](https://careers.openwebui.com/)
 
 ![Open WebUI Demo](./demo.png)

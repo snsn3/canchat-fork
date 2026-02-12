@@ -310,3 +310,10 @@ cypress/screenshots
 
 # Qdrant
 /qdrant_storage
+
+# Local model files (large, downloaded separately)
+# Keep README files for documentation
+all-MiniLM-L6-v2/*
+!all-MiniLM-L6-v2/README.md
+whisper/*
+!whisper/README.md
