@@ -160,10 +160,6 @@ class DomainTable:
 
     def get_available_domains_list(self) -> List[str]:
         """Get list of all available domain names as strings from domains table only"""
-        return [domain.domain for domain in self.get_domains()]
-
-    def get_available_domains_list(self) -> list[str]:
-        """Get list of all available domain names as strings"""
         return [domain.domain for domain in self.get_available_domains()]
 
 
