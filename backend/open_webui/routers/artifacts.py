@@ -25,7 +25,7 @@ def get_base_url(request: Request) -> str:
     base_url = (request.app.state.config.CANCHAT_PUBLIC_URL or 
                 request.app.state.config.WEBUI_URL or 
                 DEFAULT_BASE_URL)
-    return base_url.rstrip("/") if base_url else DEFAULT_BASE_URL
+    return base_url.rstrip("/")
 
 
 ############################

@@ -69,7 +69,8 @@ def store_artifact(
     # Create safe filename with UUID prefix
     safe_filename = f"{artifact_id}_{filename}"
     
-    # Sanitize filename to prevent path traversal
+    # Sanitize filename to prevent path traversal (defense-in-depth)
+    # Even with UUID prefix, input filename could contain path separators
     safe_filename = os.path.basename(safe_filename)
     
     # Full path for the artifact
