@@ -13,6 +13,9 @@ log.setLevel(SRC_LOG_LEVELS["MODELS"])
 # Define artifacts storage directory
 ARTIFACTS_DIR = Path(DATA_DIR) / "artifacts"
 
+# Default base URL fallback
+DEFAULT_BASE_URL = "http://localhost:3000"
+
 
 def ensure_artifacts_dir():
     """Ensure the artifacts directory exists."""
@@ -53,13 +56,13 @@ def store_artifact(
     artifact_path = artifact_path.resolve()
     
     # Verify the resolved path is still under ARTIFACTS_DIR
-    # is_relative_to() was added in Python 3.9 and can raise ValueError 
-    # for edge cases (e.g., different drives on Windows, certain symlink scenarios)
+    # is_relative_to() raises TypeError for incompatible path types
+    # We also manually raise ValueError for path traversal attempts
     try:
         if not artifact_path.is_relative_to(ARTIFACTS_DIR.resolve()):
             raise ValueError("Invalid artifact path: path traversal detected")
     except (ValueError, TypeError) as e:
-        # Catch ValueError from is_relative_to or if path resolution fails
+        # Catch our ValueError or TypeError from is_relative_to
         raise ValueError(f"Invalid artifact path: {str(e)}")
     
     # Write the file
@@ -84,7 +87,7 @@ def store_artifact(
     
     base_url = (CANCHAT_PUBLIC_URL.value or WEBUI_URL.value)
     # Remove trailing slash from base_url if present
-    base_url = base_url.rstrip("/") if base_url else "http://localhost:3000"
+    base_url = base_url.rstrip("/") if base_url else DEFAULT_BASE_URL
     url = f"{base_url}/api/v1/artifacts/{artifact_id}/content"
     
     log.info(f"Stored artifact {artifact_id} for user {user_id}: {filename} ({file_size} bytes)")
@@ -118,13 +121,13 @@ def get_artifact_path(relative_path: str) -> Path:
     artifact_path = artifact_path.resolve()
     
     # Verify the resolved path is still under ARTIFACTS_DIR
-    # is_relative_to() was added in Python 3.9 and can raise ValueError 
-    # for edge cases (e.g., different drives on Windows, certain symlink scenarios)
+    # is_relative_to() raises TypeError for incompatible path types
+    # We also manually raise ValueError for path traversal attempts
     try:
         if not artifact_path.is_relative_to(ARTIFACTS_DIR.resolve()):
             raise ValueError("Invalid artifact path: path traversal detected")
     except (ValueError, TypeError) as e:
-        # Catch ValueError from is_relative_to or if path resolution fails
+        # Catch our ValueError or TypeError from is_relative_to
         raise ValueError(f"Invalid artifact path: {str(e)}")
     
     return artifact_path

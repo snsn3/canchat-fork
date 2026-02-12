@@ -11,7 +11,7 @@ from open_webui.models.artifacts import (
     Artifacts,
     ArtifactResponse,
 )
-from open_webui.utils.artifacts import get_artifact_path
+from open_webui.utils.artifacts import get_artifact_path, DEFAULT_BASE_URL
 from open_webui.utils.auth import get_admin_user, get_verified_user
 
 log = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ async def get_artifact_metadata(artifact_id: str, request: Request, user=Depends
     
     # Build URL
     base_url = (request.app.state.config.CANCHAT_PUBLIC_URL or request.app.state.config.WEBUI_URL)
-    base_url = base_url.rstrip("/") if base_url else "http://localhost:3000"
+    base_url = base_url.rstrip("/") if base_url else DEFAULT_BASE_URL
     url = f"{base_url}/api/v1/artifacts/{artifact_id}/content"
     
     return ArtifactResponse(
@@ -144,7 +144,7 @@ async def list_user_artifacts(request: Request, user=Depends(get_verified_user))
     
     # Build URLs for each artifact
     base_url = (request.app.state.config.CANCHAT_PUBLIC_URL or request.app.state.config.WEBUI_URL)
-    base_url = base_url.rstrip("/") if base_url else "http://localhost:3000"
+    base_url = base_url.rstrip("/") if base_url else DEFAULT_BASE_URL
     
     return [
         ArtifactResponse(
