@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { WorkBook } from 'xlsx';
+	import type { Workbook } from 'exceljs';
 
 	import { getContext, onMount, tick } from 'svelte';
 
@@ -32,7 +32,7 @@
 	let isExcel = false;
 
 	let selectedTab = '';
-	let excelWorkbook: WorkBook | null = null;
+	let excelWorkbook: Workbook | null = null;
 	let excelSheetNames: string[] = [];
 	let selectedSheet = '';
 	let excelHtml = '';
@@ -92,12 +92,15 @@
 	const loadExcelContent = async () => {
 		try {
 			excelError = '';
-			const [arrayBuffer, { read }] = await Promise.all([
+			const [arrayBuffer, ExcelJS] = await Promise.all([
 				getFileContentById(item.id),
-				import('xlsx')
+				import('exceljs')
 			]);
-			excelWorkbook = read(arrayBuffer, { type: 'array' });
-			excelSheetNames = excelWorkbook.SheetNames;
+			
+			const workbook = new ExcelJS.Workbook();
+			await workbook.xlsx.load(arrayBuffer);
+			excelWorkbook = workbook;
+			excelSheetNames = workbook.worksheets.map(sheet => sheet.name);
 
 			if (excelSheetNames.length > 0) {
 				selectedSheet = excelSheetNames[0];
@@ -112,17 +115,39 @@
 	const renderExcelSheet = async () => {
 		if (!excelWorkbook || !selectedSheet) return;
 
-		const worksheet = excelWorkbook.Sheets[selectedSheet];
-		// Calculate row count
-		const XLSX = await import('xlsx');
-		const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1:A1');
-		rowCount = range.e.r - range.s.r + 1;
+		const worksheet = excelWorkbook.getWorksheet(selectedSheet);
+		if (!worksheet) return;
 
-		excelHtml = XLSX.utils.sheet_to_html(worksheet, {
-			id: 'excel-table',
-			editable: false,
-			header: ''
+		// Calculate row count
+		rowCount = worksheet.rowCount;
+
+		// Convert worksheet to HTML table
+		let html = '<table id="excel-table">';
+		
+		worksheet.eachRow((row, rowNumber) => {
+			html += '<tr>';
+			row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+				const value = cell.value;
+				let cellValue = '';
+				
+				// Handle different cell value types
+				if (value === null || value === undefined) {
+					cellValue = '';
+				} else if (typeof value === 'object' && 'richText' in value) {
+					cellValue = value.richText.map((rt: any) => rt.text).join('');
+				} else if (typeof value === 'object' && 'formula' in value) {
+					cellValue = value.result?.toString() || '';
+				} else {
+					cellValue = value.toString();
+				}
+				
+				html += `<td>${cellValue}</td>`;
+			});
+			html += '</tr>';
 		});
+		
+		html += '</table>';
+		excelHtml = html;
 	};
 
 	$: if (selectedSheet && excelWorkbook) {
