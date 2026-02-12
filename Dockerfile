@@ -53,6 +53,8 @@ ENV ENV=prod \
     ANONYMIZED_TELEMETRY=false \
     WHISPER_MODEL="base" \
     WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models" \
+    RAG_EMBEDDING_MODEL="${USE_EMBEDDING_MODEL}" \
+    RAG_RERANKING_MODEL="${USE_RERANKING_MODEL}" \
     SENTENCE_TRANSFORMERS_HOME="/app/backend/data/cache/embedding/models" \
     TIKTOKEN_ENCODING_NAME="cl100k_base" \
     TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken" \
@@ -112,25 +114,24 @@ RUN if [ "$USE_CUDA" = "true" ]; then \
     fi
 
 COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
-RUN uv pip install --system -r requirements.txt --no-cache-dir
 
-# === COPY LOCAL MODEL FILES ===
-COPY ./all-MiniLM-L6-v2 /app/backend/data/cache/embedding/models/all-MiniLM-L6-v2
-COPY ./whisper /app/backend/data/cache/whisper/models
-
-# Set environment variables to point to local model paths
-ENV RAG_EMBEDDING_MODEL=/app/backend/data/cache/embedding/models/all-MiniLM-L6-v2
-ENV WHISPER_MODEL_DIR=/app/backend/data/cache/whisper/models
-ENV WHISPER_MODEL=base
-
-# === DEBUG: List Whisper model files in image ===
-RUN ls -lh /app/backend/data/cache/whisper/models/base
-
-# === Pre-download models for a warm start ===
-RUN python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ.get('RAG_EMBEDDING_MODEL'), device='cpu')"
-RUN python -c "import os; from faster_whisper import WhisperModel; model_path = os.path.join(os.environ.get('WHISPER_MODEL_DIR', '/app/backend/data/cache/whisper/models'), os.environ.get('WHISPER_MODEL', 'base')); WhisperModel(model_path, device='cpu', compute_type='int8', local_files_only=True)"
-RUN python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ.get('TIKTOKEN_ENCODING_NAME','cl100k_base'))"
-RUN chown -R $UID:$GID /app/backend/data/
+# Install Python dependencies and pre-download models
+RUN uv pip install --system -r requirements.txt --no-cache-dir && \
+    if [ "$USE_CUDA" = "true" ]; then \
+      # Download models for CUDA builds
+      python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ.get('USE_EMBEDDING_MODEL_DOCKER', 'sentence-transformers/all-MiniLM-L6-v2'), device='cpu')" && \
+      python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ.get('WHISPER_MODEL', 'base'), device='cpu', compute_type='int8', download_root=os.environ.get('WHISPER_MODEL_DIR', '/app/backend/data/cache/whisper/models'))" && \
+      python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ.get('TIKTOKEN_ENCODING_NAME', 'cl100k_base'))" && \
+      python -c "import nltk; nltk.download('punkt_tab')"; \
+    else \
+      # Download models for CPU builds
+      python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ.get('USE_EMBEDDING_MODEL_DOCKER', 'sentence-transformers/all-MiniLM-L6-v2'), device='cpu')" && \
+      python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ.get('WHISPER_MODEL', 'base'), device='cpu', compute_type='int8', download_root=os.environ.get('WHISPER_MODEL_DIR', '/app/backend/data/cache/whisper/models'))" && \
+      python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ.get('TIKTOKEN_ENCODING_NAME', 'cl100k_base'))" && \
+      python -c "import nltk; nltk.download('punkt_tab')"; \
+    fi && \
+    mkdir -p /app/backend/data && \
+    chown -R $UID:$GID /app/backend/data/
 
 # === Copy frontend build ===
 COPY --chown=$UID:$GID --from=build /app/build /app/build
