@@ -1,7 +1,7 @@
 """add domain to user table
 
 Revision ID: 5233b3d5b959
-Revises: 3781e22d8b01
+Revises: c440947495f3
 Create Date: 2025-04-01 10:45:28.890543
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "5233b3d5b959"
-down_revision = "3781e22d8b01"
+down_revision = "c440947495f3"
 branch_labels = None
 depends_on = None
 
