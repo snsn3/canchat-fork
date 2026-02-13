@@ -69,6 +69,7 @@
 	let stderr = null;
 	let result = null;
 	let files = null;
+	let downloadFiles = null;
 
 	let copied = false;
 	let saved = false;
@@ -209,6 +210,11 @@
 				}
 
 				output['stderr'] && (stderr = output['stderr']);
+
+				// Handle download files from code execution
+				if (output['download_files'] && Array.isArray(output['download_files'])) {
+					downloadFiles = output['download_files'];
+				}
 			}
 
 			executing = false;
@@ -396,6 +402,11 @@
 				stdout = output.stdout;
 				stderr = output.stderr;
 				result = output.result;
+
+				// Parse download files created during code execution
+				if (output.download_files && Array.isArray(output.download_files)) {
+					downloadFiles = output.download_files;
+				}
 			} catch (error) {
 				console.error('Error:', error);
 			}
@@ -567,7 +578,7 @@
 					class="bg-gray-50 dark:bg-black dark:text-white max-w-full overflow-x-auto scrollbar-hidden"
 				/>
 
-				{#if executing || stdout || stderr || result || files}
+				{#if executing || stdout || stderr || result || files || downloadFiles}
 					<div
 						class="bg-gray-50 dark:bg-black dark:text-white rounded-b-3xl! py-4 px-4 flex flex-col gap-2"
 					>
@@ -604,6 +615,38 @@
 											{/each}
 										</div>
 									{/if}
+								</div>
+							{/if}
+							{#if downloadFiles && downloadFiles.length > 0}
+								<div class=" ">
+									<div class=" text-gray-500 text-sm mb-1">{$i18n.t('FILES')}</div>
+									<div class="flex flex-col gap-1.5">
+										{#each downloadFiles as dlFile}
+											<a
+												href={dlFile.url}
+												target="_blank"
+												rel="noopener noreferrer"
+												download={dlFile.name}
+												class="inline-flex items-center gap-2 text-sm px-3 py-2 rounded-xl bg-white dark:bg-gray-850 hover:bg-gray-100 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700 transition w-fit"
+											>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke-width="1.5"
+													stroke="currentColor"
+													class="size-4"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"
+													/>
+												</svg>
+												{dlFile.name}
+											</a>
+										{/each}
+									</div>
 								</div>
 							{/if}
 						{/if}

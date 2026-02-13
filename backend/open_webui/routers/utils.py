@@ -14,6 +14,7 @@ from open_webui.utils.misc import get_gravatar_url
 from open_webui.utils.pdf_generator import PDFGenerator
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.code_interpreter import execute_code_jupyter
+from open_webui.utils.code_interpreter_files import process_code_interpreter_files
 
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,17 @@ async def execute_code(
             ),
             request.app.state.config.CODE_EXECUTION_JUPYTER_TIMEOUT,
         )
+
+        # Upload any files created during execution so users can download them.
+        if isinstance(output, dict) and output.get("files"):
+            file_url_map = process_code_interpreter_files(
+                request, output["files"], {}, user
+            )
+            if file_url_map:
+                output["download_files"] = [
+                    {"name": n, "url": u} for n, u in file_url_map.items()
+                ]
+            output.pop("files", None)
 
         return output
     else:

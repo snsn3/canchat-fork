@@ -64,6 +64,10 @@ from open_webui.utils.files import (
     get_image_base64_from_url,
     get_image_url_from_base64,
 )
+from open_webui.utils.code_interpreter_files import (
+    process_code_interpreter_files,
+    replace_sandbox_links,
+)
 
 
 from open_webui.models.users import UserModel
@@ -2346,6 +2350,10 @@ async def process_chat_response(
 
         # Handle as a background task
         async def response_handler(response, events):
+            # Accumulated map of sandbox filenames → download URLs built
+            # during code-interpreter execution rounds.
+            code_interpreter_file_url_map: dict[str, str] = {}
+
             def serialize_content_blocks(content_blocks, raw=False):
                 content = ""
 
@@ -2479,7 +2487,16 @@ async def process_chat_response(
                         if block_content:
                             content = f"{content}{block['type']}: {block_content}\n"
 
-                return content.strip()
+                # Replace any sandbox:/mnt/data/ links that the LLM may
+                # have produced, using the accumulated file URL map from
+                # code-interpreter execution rounds.
+                content = replace_sandbox_links(
+                    content.strip(),
+                    code_interpreter_file_url_map
+                    if code_interpreter_file_url_map
+                    else None,
+                )
+                return content
 
             def convert_content_blocks_to_messages(content_blocks, raw=False):
                 messages = []
@@ -3564,6 +3581,54 @@ async def process_chat_response(
                                                     f"![Output Image]({image_url})"
                                                 )
                                         output["result"] = "\n".join(resultLines)
+
+                                    # ── Handle files created during execution ──
+                                    raw_files = output.get("files", None)
+                                    if raw_files:
+                                        file_url_map = process_code_interpreter_files(
+                                            request, raw_files, metadata, user
+                                        )
+                                        if file_url_map:
+                                            # Accumulate into the outer map
+                                            # so serialize_content_blocks can
+                                            # replace sandbox links later.
+                                            code_interpreter_file_url_map.update(
+                                                file_url_map
+                                            )
+                                            # Append download links to stdout
+                                            # so the LLM can reference them.
+                                            links_section = "\n\nFiles created:\n"
+                                            for fname, furl in file_url_map.items():
+                                                links_section += (
+                                                    f"- [{fname}]({furl})\n"
+                                                )
+                                            output["stdout"] = (
+                                                output.get("stdout", "")
+                                                + links_section
+                                            )
+                                            # Replace sandbox links
+                                            # in stdout and result
+                                            output["stdout"] = replace_sandbox_links(
+                                                output["stdout"], file_url_map
+                                            )
+                                            if output.get("result"):
+                                                output["result"] = (
+                                                    replace_sandbox_links(
+                                                        output["result"],
+                                                        file_url_map,
+                                                    )
+                                                )
+                                            # Store structured download info
+                                            # for the frontend to render as
+                                            # proper download links.
+                                            output["download_files"] = [
+                                                {"name": n, "url": u}
+                                                for n, u in file_url_map.items()
+                                            ]
+                                        # Remove raw base64 file data from
+                                        # output to avoid bloating the
+                                        # response sent to the client.
+                                        output.pop("files", None)
                         except Exception as e:
                             output = str(e)
 

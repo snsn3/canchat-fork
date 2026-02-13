@@ -86,6 +86,12 @@ export const sanitizeResponseContent = (content: string) => {
 
 export const processResponseContent = (content: string) => {
 	content = processChineseContent(content);
+
+	// Replace sandbox:/mnt/data/ links that the LLM may generate (ChatGPT convention)
+	// with relative /mnt/data/ paths. Real download URLs should already have been
+	// injected by the backend; this is a safety net for any that slipped through.
+	content = content.replace(/sandbox:\/mnt\/data\//g, '/mnt/data/');
+
 	return content.trim();
 };
 
