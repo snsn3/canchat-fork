@@ -1,12 +1,19 @@
 import asyncio
-import socketio
 import logging
+import os
+import shutil
 import sys
 import time
+from pathlib import Path
+from urllib.parse import quote, urlparse
+
+import socketio
 
 from open_webui.models.users import Users, UserNameResponse
 from open_webui.models.channels import Channels
 from open_webui.models.chats import Chats
+from open_webui.config import UPLOAD_DIR
+from open_webui.utils.misc import validate_path
 
 from open_webui.env import (
     ENABLE_WEBSOCKET_SUPPORT,
@@ -48,6 +55,7 @@ else:
 
 # Timeout duration in seconds
 TIMEOUT_DURATION = 3
+GENERATED_UPLOADS_API_PREFIX = "/api/files/uploads"
 
 # Dictionary to maintain the user pool
 
@@ -82,6 +90,146 @@ else:
     USER_POOL = {}
     USAGE_POOL = {}
     acquire_func = release_func = renew_func = lambda: True
+
+
+def _build_generated_upload_url(filename: str) -> str:
+    return f"{GENERATED_UPLOADS_API_PREFIX}/{quote(filename)}"
+
+
+def _resolve_local_file_path(path_value: str) -> Path | None:
+    if not isinstance(path_value, str) or not path_value:
+        return None
+
+    if path_value.startswith(("http://", "https://", GENERATED_UPLOADS_API_PREFIX)):
+        return None
+
+    if path_value.startswith("file://"):
+        path_value = urlparse(path_value).path
+
+    try:
+        candidate = Path(path_value)
+        if not candidate.is_absolute():
+            candidate = (Path.cwd() / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        return candidate
+    except Exception:
+        return None
+
+
+def _copy_generated_file_to_uploads(
+    source_path: Path, preferred_name: str | None = None
+) -> str | None:
+    if not source_path.is_file():
+        return None
+
+    Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+
+    safe_name = os.path.basename(preferred_name) if preferred_name else source_path.name
+    safe_name = safe_name or source_path.name
+
+    target_path = Path(UPLOAD_DIR) / safe_name
+    try:
+        validate_path(str(target_path), UPLOAD_DIR)
+    except Exception:
+        return None
+
+    if target_path.exists() and source_path.resolve() != target_path.resolve():
+        stem = target_path.stem
+        suffix = target_path.suffix
+        target_path = Path(UPLOAD_DIR) / f"{stem}_{int(time.time())}{suffix}"
+
+    try:
+        validate_path(str(target_path), UPLOAD_DIR)
+        if source_path.resolve() != target_path.resolve():
+            shutil.copy2(source_path, target_path)
+        return target_path.name
+    except Exception as e:
+        log.warning(f"Failed to persist generated file '{source_path}': {e}")
+        return None
+
+
+def _normalize_code_execution_file_entry(file_entry: dict) -> dict:
+    normalized = dict(file_entry)
+    file_name = normalized.get("name")
+    path_value = normalized.get("path") or normalized.get("url")
+
+    if isinstance(path_value, str) and path_value.startswith(("http://", "https://")):
+        if not file_name:
+            file_name = os.path.basename(urlparse(path_value).path) or "download"
+        normalized["name"] = file_name
+        normalized["path"] = path_value
+        normalized["url"] = path_value
+        return normalized
+
+    if isinstance(path_value, str) and path_value.startswith(GENERATED_UPLOADS_API_PREFIX):
+        normalized["name"] = file_name or os.path.basename(path_value)
+        normalized["path"] = path_value
+        normalized["url"] = path_value
+        return normalized
+
+    source_path = _resolve_local_file_path(path_value) if isinstance(path_value, str) else None
+    if source_path is None and isinstance(file_name, str):
+        source_path = _resolve_local_file_path(file_name)
+
+    if source_path and source_path.is_file():
+        stored_name = _copy_generated_file_to_uploads(source_path, file_name)
+        if stored_name:
+            normalized["name"] = file_name or stored_name
+            download_url = _build_generated_upload_url(stored_name)
+            normalized["path"] = download_url
+            normalized["url"] = download_url
+            return normalized
+
+    if isinstance(file_name, str) and file_name:
+        upload_path = Path(UPLOAD_DIR) / os.path.basename(file_name)
+        if upload_path.is_file():
+            download_url = _build_generated_upload_url(upload_path.name)
+            normalized["name"] = file_name
+            normalized["path"] = download_url
+            normalized["url"] = download_url
+            return normalized
+
+    if isinstance(path_value, str) and path_value:
+        normalized.setdefault("path", path_value)
+        normalized.setdefault("url", path_value)
+
+    return normalized
+
+
+def _normalize_code_execution_event(event_data: dict) -> dict:
+    if not isinstance(event_data, dict):
+        return event_data
+
+    if event_data.get("type") not in {"source", "citation"}:
+        return event_data
+
+    payload = event_data.get("data")
+    if not isinstance(payload, dict) or payload.get("type") != "code_execution":
+        return event_data
+
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return event_data
+
+    files = result.get("files")
+    if not isinstance(files, list):
+        return event_data
+
+    normalized_files = []
+    for file_entry in files:
+        if isinstance(file_entry, dict):
+            normalized_files.append(_normalize_code_execution_file_entry(file_entry))
+        elif isinstance(file_entry, str):
+            normalized_files.append(
+                _normalize_code_execution_file_entry(
+                    {"name": os.path.basename(file_entry), "path": file_entry}
+                )
+            )
+
+    payload["result"]["files"] = normalized_files
+    event_data["data"] = payload
+    return event_data
 
 
 async def periodic_usage_pool_cleanup():
@@ -536,6 +684,8 @@ async def disconnect(sid):
 
 def get_event_emitter(request_info):
     async def __event_emitter__(event_data):
+        event_data = _normalize_code_execution_event(event_data)
+
         user_id = request_info["user_id"]
         session_ids = list(
             set(USER_POOL.get(user_id, []) + [request_info["session_id"]])

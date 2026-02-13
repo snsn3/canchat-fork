@@ -116,6 +116,7 @@ COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
 # === Install Python deps with a pinned pyarrow to avoid PyExtensionType error ===
 RUN printf "pyarrow==20.0.0\n" > /tmp/constraints.txt \
  && uv pip install --system -r requirements.txt -c /tmp/constraints.txt --no-cache-dir
+RUN uv pip install --system --no-cache-dir python-docx openpyxl pandas pypdf python-pptx
 
 # === COPY LOCAL MODEL FILES ===
 COPY ./all-MiniLM-L6-v2 /app/backend/data/cache/embedding/models/all-MiniLM-L6-v2

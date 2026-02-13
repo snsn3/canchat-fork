@@ -116,7 +116,7 @@
 			result?: {
 				error?: string;
 				output?: string;
-				files?: { name: string; url: string }[];
+				files?: { name: string; path?: string; url?: string }[];
 			};
 		}[];
 		info?: {

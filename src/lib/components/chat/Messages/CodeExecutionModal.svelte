@@ -9,6 +9,23 @@
 
 	export let show = false;
 	export let codeExecution = null;
+
+	const getDownloadHref = (file) => {
+		const candidate = file?.path ?? file?.url;
+		if (!candidate || typeof candidate !== 'string') {
+			return null;
+		}
+
+		if (
+			candidate.startsWith('http://') ||
+			candidate.startsWith('https://') ||
+			candidate.startsWith('/')
+		) {
+			return candidate;
+		}
+
+		return `/${candidate}`;
+	};
 </script>
 
 <Modal size="lg" bind:show>
@@ -106,8 +123,14 @@
 						</div>
 						<ul class="mt-1 list-disc pl-4 text-xs">
 							{#each codeExecution?.result?.files as file}
+								{@const href = getDownloadHref(file)}
+								{@const label = file?.name ?? file?.path ?? file?.url ?? 'download'}
 								<li>
-									<a href={file.url} target="_blank">{file.name}</a>
+									{#if href}
+										<a href={href} target="_blank" rel="noopener noreferrer">{label}</a>
+									{:else}
+										{label}
+									{/if}
 								</li>
 							{/each}
 						</ul>
