@@ -203,8 +203,34 @@ export const sanitizeResponseContent = (content: string): string => {
 	}).trim();
 };
 
-export const processResponseContent = (content: string) => {
-	return content.trim();
+export const processResponseContent = (
+	content: string | { name?: unknown; path?: unknown; url?: unknown } | null | undefined
+) => {
+	if (typeof content === 'string') {
+		return content.trim();
+	}
+
+	if (content && typeof content === 'object') {
+		const fileName = typeof content.name === 'string' ? content.name : null;
+		const filePath =
+			typeof content.path === 'string'
+				? content.path
+				: typeof content.url === 'string'
+					? content.url
+					: null;
+
+		if (fileName && filePath) {
+			const href =
+				filePath.startsWith('http://') ||
+				filePath.startsWith('https://') ||
+				filePath.startsWith('/')
+					? filePath
+					: `/${filePath}`;
+			return `[${fileName}](${href})`;
+		}
+	}
+
+	return '';
 };
 
 export function unescapeHtml(html: string) {

@@ -27,7 +27,7 @@ from fastapi import (
 from fastapi.openapi.docs import get_swagger_ui_html
 
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -240,6 +240,7 @@ from open_webui.config import (
     # Misc
     ENV,
     CACHE_DIR,
+    UPLOAD_DIR,
     STATIC_DIR,
     FRONTEND_BUILD_DIR,
     CORS_ALLOW_ORIGIN,
@@ -316,6 +317,7 @@ from open_webui.utils.auth import (
 )
 from open_webui.utils.oauth import oauth_manager
 from open_webui.utils.security_headers import SecurityHeadersMiddleware
+from open_webui.utils.misc import validate_path
 
 from open_webui.tasks import stop_task, list_tasks  # Import from tasks.py
 
@@ -365,6 +367,9 @@ https://github.com/open-webui/open-webui
 async def lifespan(app: FastAPI):
     if RESET_CONFIG_ON_START:
         reset_config()
+
+    # Ensure upload directory exists for generated runtime artifacts.
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
 
     # Initialize metrics service
     try:
@@ -1448,6 +1453,37 @@ def healthcheck_with_db():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed",
         )
+
+
+@app.get("/api/files/uploads/{filename:path}")
+async def get_generated_upload(filename: str):
+    decoded_filename = os.path.normpath(filename).lstrip("/\\")
+    if not decoded_filename or decoded_filename == ".":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
+        )
+
+    file_path = os.path.join(UPLOAD_DIR, decoded_filename)
+    try:
+        validate_path(file_path, UPLOAD_DIR)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
+        )
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
+        )
+
+    return FileResponse(
+        path=file_path,
+        filename=os.path.basename(file_path),
+        media_type=mimetypes.guess_type(file_path)[0] or "application/octet-stream",
+    )
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
