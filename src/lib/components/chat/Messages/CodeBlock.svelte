@@ -109,6 +109,81 @@
 		return false;
 	};
 
+	const PYODIDE_PACKAGE_BY_MODULE: Record<string, string> = {
+		requests: 'requests',
+		bs4: 'beautifulsoup4',
+		numpy: 'numpy',
+		pandas: 'pandas',
+		matplotlib: 'matplotlib',
+		sklearn: 'scikit-learn',
+		scipy: 'scipy',
+		regex: 'regex',
+		seaborn: 'seaborn',
+		openpyxl: 'openpyxl',
+		docx: 'python-docx',
+		pypdf: 'pypdf',
+		fpdf: 'fpdf2',
+		xlsxwriter: 'xlsxwriter',
+		pptx: 'python-pptx'
+	};
+
+	const getImportedModules = (source: string): Set<string> => {
+		const modules = new Set<string>();
+
+		const importStatementRegex = /^\s*import\s+(.+)$/gm;
+		const fromImportStatementRegex = /^\s*from\s+([a-zA-Z_][\w.]*)\s+import\s+/gm;
+
+		let importMatch: RegExpExecArray | null = null;
+		while ((importMatch = importStatementRegex.exec(source)) !== null) {
+			for (const entry of importMatch[1].split(',')) {
+				const moduleName = entry
+					.trim()
+					.split(/\s+as\s+/)[0]
+					?.split('.')[0];
+				if (moduleName) {
+					modules.add(moduleName);
+				}
+			}
+		}
+
+		let fromImportMatch: RegExpExecArray | null = null;
+		while ((fromImportMatch = fromImportStatementRegex.exec(source)) !== null) {
+			const moduleName = fromImportMatch[1].split('.')[0];
+			if (moduleName) {
+				modules.add(moduleName);
+			}
+		}
+
+		return modules;
+	};
+
+	const inferPyodidePackages = (source: string): string[] => {
+		const packages = new Set<string>();
+		const importedModules = getImportedModules(source);
+
+		for (const moduleName of importedModules) {
+			const packageName = PYODIDE_PACKAGE_BY_MODULE[moduleName];
+			if (packageName) {
+				packages.add(packageName);
+			}
+		}
+
+		// pandas Excel exports require an engine dependency at runtime.
+		if (/to_excel\s*\(/.test(source) || /\.xlsx\b/i.test(source)) {
+			packages.add('openpyxl');
+		}
+
+		if (/\.docx\b/i.test(source)) {
+			packages.add('python-docx');
+		}
+
+		if (/\bFPDF\b/.test(source) || /\.pdf\b/i.test(source)) {
+			packages.add('fpdf2');
+		}
+
+		return [...packages];
+	};
+
 	const executePython = async (code) => {
 		if (!code.includes('input') && !code.includes('matplotlib')) {
 			executePythonAsWorker(code);
@@ -145,17 +220,7 @@
 
 				// await micropip.set_index_urls('https://pypi.org/pypi/{package_name}/json');
 
-				let packages = [
-					code.includes('requests') ? 'requests' : null,
-					code.includes('bs4') ? 'beautifulsoup4' : null,
-					code.includes('numpy') ? 'numpy' : null,
-					code.includes('pandas') ? 'pandas' : null,
-					code.includes('matplotlib') ? 'matplotlib' : null,
-					code.includes('sklearn') ? 'scikit-learn' : null,
-					code.includes('scipy') ? 'scipy' : null,
-					code.includes('re') ? 'regex' : null,
-					code.includes('seaborn') ? 'seaborn' : null
-				].filter(Boolean);
+				const packages = inferPyodidePackages(code);
 
 				await micropip.install(packages);
 
@@ -191,16 +256,7 @@ __builtins__.input = input`);
 
 		executing = true;
 
-		let packages = [
-			code.includes('requests') ? 'requests' : null,
-			code.includes('bs4') ? 'beautifulsoup4' : null,
-			code.includes('numpy') ? 'numpy' : null,
-			code.includes('pandas') ? 'pandas' : null,
-			code.includes('sklearn') ? 'scikit-learn' : null,
-			code.includes('scipy') ? 'scipy' : null,
-			code.includes('re') ? 'regex' : null,
-			code.includes('seaborn') ? 'seaborn' : null
-		].filter(Boolean);
+		const packages = inferPyodidePackages(code);
 
 		const pyodideWorker = new PyodideWorker();
 

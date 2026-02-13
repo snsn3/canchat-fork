@@ -11,7 +11,7 @@
 	export let codeExecution = null;
 
 	const getDownloadHref = (file) => {
-		const candidate = file?.path ?? file?.url;
+		const candidate = typeof file === 'string' ? file : file?.path ?? file?.url;
 		if (!candidate || typeof candidate !== 'string') {
 			return null;
 		}
@@ -25,6 +25,15 @@
 		}
 
 		return `/${candidate}`;
+	};
+
+	const getDownloadLabel = (file) => {
+		if (typeof file === 'string') {
+			const fileName = file.split('/').pop();
+			return fileName || file;
+		}
+
+		return file?.name ?? file?.path ?? file?.url ?? 'download';
 	};
 </script>
 
@@ -124,7 +133,7 @@
 						<ul class="mt-1 list-disc pl-4 text-xs">
 							{#each codeExecution?.result?.files as file}
 								{@const href = getDownloadHref(file)}
-								{@const label = file?.name ?? file?.path ?? file?.url ?? 'download'}
+								{@const label = getDownloadLabel(file)}
 								<li>
 									{#if href}
 										<a href={href} target="_blank" rel="noopener noreferrer">{label}</a>
