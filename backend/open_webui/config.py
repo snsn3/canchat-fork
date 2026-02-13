@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import requests
 from pydantic import BaseModel
 from sqlalchemy import JSON, Column, DateTime, Integer, func
+from sqlalchemy.exc import DatabaseError, OperationalError
 from authlib.integrations.starlette_client import OAuth
 
 
@@ -108,9 +109,16 @@ def reset_config():
 
 # When initializing, check if config.json exists and migrate it to the database
 if os.path.exists(f"{DATA_DIR}/config.json"):
-    data = load_json_config()
-    save_to_db(data)
-    os.rename(f"{DATA_DIR}/config.json", f"{DATA_DIR}/old_config.json")
+    try:
+        data = load_json_config()
+        save_to_db(data)
+        os.rename(f"{DATA_DIR}/config.json", f"{DATA_DIR}/old_config.json")
+    except (OperationalError, DatabaseError) as e:
+        log.warning(
+            f"Failed to migrate config.json to database (table may not exist yet): {e}"
+        )
+    except Exception as e:
+        log.exception(f"Unexpected error during config.json migration: {e}")
 
 DEFAULT_CONFIG = {
     "version": 0,
@@ -119,9 +127,18 @@ DEFAULT_CONFIG = {
 
 
 def get_config():
-    with get_db() as db:
-        config_entry = db.query(Config).order_by(Config.id.desc()).first()
-        return config_entry.data if config_entry else DEFAULT_CONFIG
+    try:
+        with get_db() as db:
+            config_entry = db.query(Config).order_by(Config.id.desc()).first()
+            return config_entry.data if config_entry else DEFAULT_CONFIG
+    except (OperationalError, DatabaseError) as e:
+        log.warning(
+            f"Failed to load config from database (table may not exist yet), using default config: {e}"
+        )
+        return DEFAULT_CONFIG
+    except Exception as e:
+        log.exception(f"Unexpected error loading config from database: {e}")
+        return DEFAULT_CONFIG
 
 
 CONFIG_DATA = get_config()
