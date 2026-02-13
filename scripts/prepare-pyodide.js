@@ -9,7 +9,11 @@ const packages = [
 	'scikit-learn',
 	'scipy',
 	'regex',
-	'seaborn'
+	'seaborn',
+	'openpyxl',
+	'python-docx',
+	'pypdf',
+	'fpdf2'
 ];
 
 import { loadPyodide } from 'pyodide';
@@ -50,14 +54,19 @@ async function downloadPackages() {
 		const micropip = pyodide.pyimport('micropip');
 		console.log('Downloading Pyodide packages:', packages);
 
-		try {
-			for (const pkg of packages) {
+		const failedPackages = [];
+		for (const pkg of packages) {
+			try {
 				console.log(`Installing package: ${pkg}`);
 				await micropip.install(pkg);
+			} catch (err) {
+				failedPackages.push(pkg);
+				console.error(`Package installation failed for ${pkg}:`, err);
 			}
-		} catch (err) {
-			console.error('Package installation failed:', err);
-			return;
+		}
+
+		if (failedPackages.length > 0) {
+			console.warn('Some Pyodide packages could not be pre-fetched:', failedPackages);
 		}
 
 		console.log('Pyodide packages downloaded, freezing into lock file');

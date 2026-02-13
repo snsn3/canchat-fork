@@ -41,7 +41,9 @@ async function loadPyodideAndPackages(packages: string[] = []) {
 	const micropip = self.pyodide.pyimport('micropip');
 
 	// await micropip.set_index_urls('https://pypi.org/pypi/{package_name}/json');
-	await micropip.install(packages);
+	if (packages.length > 0) {
+		await micropip.install(packages);
+	}
 }
 
 self.onmessage = async (event) => {
@@ -52,13 +54,12 @@ self.onmessage = async (event) => {
 		self[key] = context[key];
 	}
 
-	// make sure loading is done
-	await loadPyodideAndPackages(self.packages);
-
 	try {
+		// make sure loading is done
+		await loadPyodideAndPackages(self.packages);
 		self.result = await self.pyodide.runPythonAsync(code);
 	} catch (error) {
-		self.stderr = error.toString();
+		self.stderr = error instanceof Error ? error.toString() : String(error);
 	}
 	self.postMessage({ id, result: self.result, stdout: self.stdout, stderr: self.stderr });
 };
