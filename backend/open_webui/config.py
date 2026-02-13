@@ -113,7 +113,9 @@ if os.path.exists(f"{DATA_DIR}/config.json"):
         save_to_db(data)
         os.rename(f"{DATA_DIR}/config.json", f"{DATA_DIR}/old_config.json")
     except Exception as e:
-        log.warning(f"Failed to migrate config.json to database: {e}")
+        log.warning(
+            f"Failed to migrate config.json to database (table may not exist yet): {e}"
+        )
 
 DEFAULT_CONFIG = {
     "version": 0,
@@ -127,7 +129,9 @@ def get_config():
             config_entry = db.query(Config).order_by(Config.id.desc()).first()
             return config_entry.data if config_entry else DEFAULT_CONFIG
     except Exception as e:
-        log.warning(f"Failed to load config from database, using default: {e}")
+        log.warning(
+            f"Failed to load config from database (table may not exist yet), using default config: {e}"
+        )
         return DEFAULT_CONFIG
 
 
