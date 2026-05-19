@@ -6,16 +6,14 @@
 	import HelpMenu from '$lib/components/layout/Help/HelpMenu.svelte';
 	import UserMenu from '$lib/components/layout/Sidebar/UserMenu.svelte';
 	import GlobalLanguageSelector from '$lib/components/common/GlobalLanguageSelector.svelte';
-	import IssueModal from '$lib/components/common/IssueModal.svelte';
-	import SuggestionModal from '$lib/components/common/SuggestionModal.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 
 	const i18n = getContext('i18n');
 
+	const SUPPORT_EMAIL = 'datascience-sciencedesdonnees@infc.gc.ca';
+
 	// Modals
 	let showShortcuts = false;
-	let showIssue = false;
-	let showSuggestion = false;
 
 	// Reactive Statements
 	$: SurveyUrl = $i18n.language === 'fr-CA' ? $config?.survey_url_fr : $config?.survey_url;
@@ -25,18 +23,22 @@
 	// Event Handlers
 	const toggleShortcuts = () => (showShortcuts = !showShortcuts);
 	const openUrl = (url: string) => window.open(url, '_blank');
+	const openMailto = (subject: string) => {
+		const mailtoUrl = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(subject)}`;
+		window.location.href = mailtoUrl;
+	};
 </script>
 
 <div class="flex items-center gap-1 mr-1">
 	<!-- Help Menu -->
 	<div class="self-start flex flex-none items-center text-gray-600 dark:text-gray-400">
 		<HelpMenu
-			showDocsHandler={() => openUrl(DocsUrl)}
-			showTrainingHandler={() => openUrl(TrainingUrl)}
+			showDocsHandler={() => openMailto('Documentation')}
+			showTrainingHandler={() => openMailto('Training Course')}
 			showShortcutsHandler={toggleShortcuts}
-			showSurveyHandler={() => openUrl(SurveyUrl)}
-			showIssueHandler={() => (showIssue = true)}
-			showSuggestionHandler={() => (showSuggestion = true)}
+			showSurveyHandler={() => openMailto('User Survey')}
+			showIssueHandler={() => openMailto('Report an Issue')}
+			showSuggestionHandler={() => openMailto('Suggestion Box')}
 		>
 			<Tooltip content={$i18n.t('Help')} placement="bottom">
 				<div
@@ -81,5 +83,3 @@
 
 <!-- Modals -->
 <ShortcutsModal bind:show={showShortcuts} />
-<IssueModal bind:show={showIssue} />
-<SuggestionModal bind:show={showSuggestion} />
