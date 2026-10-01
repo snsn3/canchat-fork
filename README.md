@@ -1,4 +1,6 @@
-# Welcome to CANChat 👋
+# Welcome to CanChat @ HICC👋
+
+This a working clone of ([CanChat](https://github.com/dto-btn/canchat-v2) deployed on Housing, Infrastructure and Communities Canada (HICC)'s infrastructure by the Artificial Intelligence Center of Expertise under the Office of the Chief Data Officer (OCDO). 
 
 ![GitHub stars](https://img.shields.io/github/stars/ssc-dsai/canchat-v2?style=social)
 ![GitHub forks](https://img.shields.io/github/forks/ssc-dsai/canchat-v2?style=social)
@@ -260,7 +262,9 @@ If you have any questions, suggestions, or need assistance, please see our
 
 ---
 
-# Bienvenue à CANChat
+# Bienvenue à CanChat @ LICC 👋
+
+Il s'agit d'une copie fonctionnelle de (CanChat déployée sur l'infrastructure de Logement, Infrastructures et Collectivités Canada (LICC) par le Centre d'expertise en intelligence artificielle relevant du Bureau de la Dirigente principale des données (BDPD).
 
 **CANChat est une plateforme d’intelligence artificielle (IA) auto-hébergée, extensible, riche en fonctionnalités et conviviale, conçue pour fonctionner entièrement hors ligne.** Elle prend en charge divers moteurs LLM comme **Ollama** et les **APIs compatibles avec OpenAI**, avec un **moteur d'inférence intégré** pour le RAG, faisant ainsi de CANChat une **puissante solution de déploiement IA**.
 
